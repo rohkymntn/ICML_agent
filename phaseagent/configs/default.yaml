@@ -1,0 +1,19 @@
+build:
+  fitness_normalization: rank
+  threshold_mode: quantile
+  threshold_value: 0.75
+
+phase:
+  min_count_per_distance: 10
+  bootstrap: 200
+
+phaseagent:
+  initial_n: 20
+  batch_size: 10
+  steps: 20
+  repeats: 20
+
+search:
+  budget: 50
+  repeats: 20
+  lambda_boundary: 0.5

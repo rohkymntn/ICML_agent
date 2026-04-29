@@ -1,0 +1,16 @@
+datasets: []  # populate with real DMS CSVs; empty list triggers synthetic fallback in build_dataset.py
+# Example entry:
+# datasets:
+#   - dataset_id: GFP_example
+#     path: data/raw/gfp.csv
+#     wildtype_sequence: null
+#     mutation_col: mutant
+#     fitness_col: DMS_score
+#     sequence_col: mutated_sequence
+#     notes: "GFP landscape"
+
+settings:
+  fitness_normalization: rank
+  threshold_mode: quantile
+  threshold_value: 0.75
+  min_count_per_distance: 10
