@@ -1,0 +1,12 @@
+dataset_id,split,clinical
+CAPSD_AAV2S_Sinai_2021,train,False
+D7PM05_CLYGR_Somermeyer_2022,train,False
+F7YBW8_MESOW_Aakre_2015,test,False
+F7YBW8_MESOW_Ding_2023,train,False
+GCN4_YEAST_Staller_2018,test,False
+GFP_AEQVI_Sarkisyan_2016,val,False
+HIS7_YEAST_Pokusaeva_2019,train,False
+PHOT_CHLRE_Chen_2023,train,False
+Q6WV12_9MAXI_Somermeyer_2022,train,False
+Q8WTC7_9CNID_Somermeyer_2022,train,False
+SPG1_STRSG_Wu_2016,train,False

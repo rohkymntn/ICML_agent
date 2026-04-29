@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+outputs/figures/*
+outputs/tables/*
+outputs/logs/*
+!outputs/figures/.gitkeep
+!outputs/tables/.gitkeep
+!outputs/logs/.gitkeep
+.ipynb_checkpoints/
+.pytest_cache/
+*.egg-info/
+.DS_Store

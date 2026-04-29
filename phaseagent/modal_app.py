@@ -1,0 +1,1386 @@
+"""Modal app for PhaseAgent-lite.
+
+Volume:    phaseagent-data (mounted at /data inside containers)
+Layout on volume:
+    /data/raw/proteingym_v1_3/   raw per-assay CSVs from the substitution archive
+    /data/processed/all_dms.parquet
+    /data/outputs/tables/*.csv
+    /data/outputs/figures/*.png|.pdf
+
+Quickstart:
+    modal run modal_app.py::download_proteingym
+    modal run modal_app.py::build_dataset --n-datasets 10
+    modal run modal_app.py::run_phase_atlas
+    modal run modal_app.py::run_phaseagent
+    modal run modal_app.py::run_phase_aware_search
+    modal run modal_app.py::run_plm_scoring  # GPU
+    modal run modal_app.py::make_figures
+    modal run modal_app.py::pull_outputs --local-dir outputs
+
+Or run the whole pipeline:
+    modal run modal_app.py
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+import modal
+
+APP_NAME = "phaseagent"
+VOLUME_NAME = "phaseagent-data"
+VOLUME_PATH = "/data"
+
+app = modal.App(APP_NAME)
+volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+
+CPU_PIP = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "scikit-learn>=1.2",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+    "tqdm>=4.65",
+    "requests>=2.31",
+    "biopython>=1.81",
+    "pyarrow>=14.0",
+]
+
+GPU_PIP = ["torch==2.4.0", "fair-esm==2.0.0"]
+
+cpu_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(*CPU_PIP)
+    .add_local_dir("src/phaseagent", remote_path="/root/phaseagent", copy=True)
+)
+
+gpu_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(*CPU_PIP, *GPU_PIP)
+    .add_local_dir("src/phaseagent", remote_path="/root/phaseagent", copy=True)
+)
+
+
+# ---------- 1. Download ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def download_proteingym(
+    url: str = "https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/DMS_ProteinGym_substitutions.zip",
+    out_dir: str = "raw/proteingym_v1_3",
+    overwrite: bool = False,
+) -> dict:
+    import io
+    import zipfile
+
+    import requests
+    from tqdm import tqdm
+
+    target = Path(VOLUME_PATH) / out_dir
+    if target.exists() and any(target.rglob("*.csv")) and not overwrite:
+        n = sum(1 for _ in target.rglob("*.csv"))
+        print(f"[download] {target} already populated with {n} CSVs; skip (overwrite=False)")
+        return {"path": str(target), "n_csvs": n, "skipped": True}
+    target.mkdir(parents=True, exist_ok=True)
+    print(f"[download] {url}")
+    with requests.get(url, stream=True, timeout=600) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length") or 0)
+        buf = io.BytesIO()
+        chunk = 8 * 1024 * 1024
+        with tqdm(total=total, unit="B", unit_scale=True) as pbar:
+            for c in r.iter_content(chunk_size=chunk):
+                if c:
+                    buf.write(c)
+                    pbar.update(len(c))
+        buf.seek(0)
+    print("[download] extracting…")
+    with zipfile.ZipFile(buf) as z:
+        z.extractall(target)
+    volume.commit()
+    csvs = list(target.rglob("*.csv"))
+    print(f"[download] wrote {len(csvs)} CSVs to {target}")
+    return {"path": str(target), "n_csvs": len(csvs), "skipped": False}
+
+
+# ---------- 2. Build processed parquet ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def build_dataset(
+    raw_dir: str = "raw/proteingym_v1_3",
+    out_path: str = "processed/all_dms.parquet",
+    fitness_normalization: str = "rank",
+    threshold_mode: str = "quantile",
+    threshold_value: float = 0.75,
+    n_datasets: Optional[int] = None,
+    min_rows: int = 100,
+    max_rows: int = 200_000,
+) -> dict:
+    from phaseagent.proteingym import build_proteingym_dataset
+
+    raw = Path(VOLUME_PATH) / raw_dir
+    out = Path(VOLUME_PATH) / out_path
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    if not raw.exists() or not any(raw.rglob("*.csv")):
+        raise FileNotFoundError(
+            f"No raw CSVs at {raw}. Run `modal run modal_app.py::download_proteingym` first."
+        )
+
+    full, summary = build_proteingym_dataset(
+        raw_dir=raw,
+        fitness_normalization=fitness_normalization,
+        threshold_mode=threshold_mode,
+        threshold_value=threshold_value,
+        n_datasets=n_datasets,
+        min_rows=min_rows,
+        max_rows=max_rows,
+    )
+    full.to_parquet(out, index=False)
+    summary_path = Path(VOLUME_PATH) / "outputs/tables/dataset_summary.csv"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(summary_path, index=False)
+    volume.commit()
+    return {"rows": int(len(full)), "datasets": int(len(summary)), "out": str(out)}
+
+
+# ---------- 3. Phase atlas ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_phase_atlas(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/tables/phase_boundaries.csv",
+    bootstrap: int = 200,
+    min_count_per_distance: int = 10,
+) -> dict:
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.phase import (
+        bootstrap_phase_boundary,
+        classify_phase_regime,
+        compute_viability_by_distance,
+        fit_phase_boundary,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    boundaries, v_long, bootstraps = [], [], []
+    for ds_id, sub in df.groupby("dataset_id"):
+        v = compute_viability_by_distance(sub, min_count_per_distance=min_count_per_distance)
+        fit = fit_phase_boundary(v)
+        regime = classify_phase_regime(fit["dc"], fit["alpha"], fit.get("r2"), v)
+        v["dataset_id"] = ds_id
+        v["dc"] = fit["dc"]
+        v_long.append(v)
+        boundaries.append({"dataset_id": ds_id, "regime": regime, **fit})
+        if bootstrap > 0:
+            boot = bootstrap_phase_boundary(
+                sub, n_boot=bootstrap, min_count_per_distance=min_count_per_distance
+            )
+            boot["dataset_id"] = ds_id
+            bootstraps.append(boot)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(boundaries).to_csv(out_path, index=False)
+    pd.concat(v_long, ignore_index=True).to_csv(out_path.parent / "viability_by_distance.csv", index=False)
+    if bootstraps:
+        pd.concat(bootstraps, ignore_index=True).to_csv(
+            out_path.parent / "bootstrap_boundaries.csv", index=False
+        )
+    volume.commit()
+    return {"datasets": len(boundaries), "out": str(out_path)}
+
+
+# ---------- 4. PhaseAgent active query ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 4)
+def run_phaseagent(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/tables/phaseagent_simulation.csv",
+    initial_n: int = 20,
+    batch_size: int = 10,
+    steps: int = 20,
+    repeats: int = 20,
+    datasets: str = "",
+) -> dict:
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.agents import (
+        BoundaryGreedyPolicy,
+        PhaseAgentPolicy,
+        RandomPolicy,
+        UncertaintyShellPolicy,
+        UniformShellPolicy,
+        simulate_boundary_discovery,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    ds_filter = [s for s in datasets.split(",") if s.strip()]
+    if ds_filter:
+        df = df[df["dataset_id"].isin(ds_filter)]
+
+    rng = np.random.default_rng(0)
+    policies = [
+        RandomPolicy(rng),
+        UniformShellPolicy(rng),
+        UncertaintyShellPolicy(rng),
+        BoundaryGreedyPolicy(rng),
+        PhaseAgentPolicy(rng),
+    ]
+    rows = []
+    for ds_id, sub in df.groupby("dataset_id"):
+        for pol in policies:
+            sim = simulate_boundary_discovery(
+                sub.reset_index(drop=True),
+                policy=pol,
+                initial_n=initial_n,
+                batch_size=batch_size,
+                n_steps=steps,
+                n_repeats=repeats,
+            )
+            sim["dataset_id"] = ds_id
+            rows.append(sim)
+    out_df = pd.concat(rows, ignore_index=True)
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+# ---------- 5. Phase-aware search ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_phase_aware_search(
+    data: str = "processed/all_dms.parquet",
+    boundaries_csv: str = "outputs/tables/phase_boundaries.csv",
+    out: str = "outputs/tables/search_benchmark.csv",
+    budget: int = 50,
+    repeats: int = 20,
+    lambda_boundary: float = 0.5,
+) -> dict:
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.search import run_search_benchmark
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    bd = pd.read_csv(Path(VOLUME_PATH) / boundaries_csv)
+    bd_dict = {
+        r["dataset_id"]: {"dc": r["dc"], "alpha": r["alpha"], "dc_true": r["dc"]}
+        for _, r in bd.iterrows()
+    }
+    datasets_dict = {ds: sub.reset_index(drop=True) for ds, sub in df.groupby("dataset_id")}
+    seeds = list(range(repeats))
+    out_df = run_search_benchmark(
+        datasets=datasets_dict,
+        boundaries=bd_dict,
+        budgets=[budget],
+        seeds=seeds,
+        lambda_boundary=lambda_boundary,
+    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+# ---------- 6. PLM scoring (GPU) ----------
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 4)
+def run_plm_scoring(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/tables/plm_scores.csv",
+    model_name: str = "esm2_t33_650M_UR50D",
+    max_per_dataset: int = 5000,
+    batch_size: int = 4,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.plm import score_dataset_plm
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    out_df = score_dataset_plm(
+        df,
+        model_name=model_name,
+        max_per_dataset=max_per_dataset,
+        batch_size=batch_size,
+    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+# ---------- 7. Make figures ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def make_figures(
+    tables_dir: str = "outputs/tables",
+    figures_dir: str = "outputs/figures",
+    data: str = "processed/all_dms.parquet",
+) -> dict:
+    from phaseagent.plots import make_all_figures
+
+    tab = Path(VOLUME_PATH) / tables_dir
+    fig = Path(VOLUME_PATH) / figures_dir
+    fig.mkdir(parents=True, exist_ok=True)
+    n = make_all_figures(tab, fig, Path(VOLUME_PATH) / data)
+    volume.commit()
+    return {"figures": n, "out": str(fig)}
+
+
+# ---------- 8. Spectral PhaseAgent advanced path ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def build_spectra(
+    data: str = "processed/all_dms.parquet",
+    out_dir: str = "outputs/spectral",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.spectrum import (
+        build_spectrum_tokens,
+        compute_single_mutant_effects,
+        spectrum_summary_features,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    out = Path(VOLUME_PATH) / out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    summaries, tokens, effects = [], [], []
+    for ds_id, sub in df.groupby("dataset_id"):
+        summaries.append(spectrum_summary_features(sub))
+        tok = build_spectrum_tokens(sub)
+        eff = compute_single_mutant_effects(sub)
+        tok["dataset_id"] = ds_id
+        eff["dataset_id"] = ds_id
+        tokens.append(tok)
+        effects.append(eff)
+    pd.DataFrame(summaries).to_csv(out / "spectrum_summary.csv", index=False)
+    pd.concat(tokens, ignore_index=True).to_parquet(out / "spectrum_tokens.parquet", index=False)
+    pd.concat(effects, ignore_index=True).to_parquet(out / "single_mutant_effects.parquet", index=False)
+    volume.commit()
+    return {"datasets": len(summaries), "out": str(out)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_large_deviation(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/tables/large_deviation_survival.csv",
+    n_mc: int = 20_000,
+    min_shells: int = 2,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.eval_survival import evaluate_survival_prediction, true_survival_curve
+    from phaseagent.large_deviation import additive_survival_curve
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    curves, metrics = [], []
+    for ds_id, sub in df.groupby("dataset_id"):
+        if sub["mutation_distance"].nunique() < min_shells:
+            continue
+        depths = range(0, int(sub["mutation_distance"].max()) + 1)
+        curve = additive_survival_curve(sub, depths=depths, n_mc=n_mc)
+        curve["dataset_id"] = ds_id
+        true = true_survival_curve(sub)
+        curve = curve.merge(
+            true[["mutation_distance", "survival_true", "n", "stderr"]],
+            on="mutation_distance",
+            how="left",
+        )
+        curves.append(curve)
+        pred = curve.rename(columns={"survival_large_deviation": "survival_pred"})
+        metric = evaluate_survival_prediction(pred, true, pred_col="survival_pred")
+        metrics.append({"dataset_id": ds_id, **metric})
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if curves:
+        pd.concat(curves, ignore_index=True).to_csv(out_path, index=False)
+    else:
+        pd.DataFrame().to_csv(out_path, index=False)
+    pd.DataFrame(metrics).to_csv(out_path.parent / "large_deviation_metrics.csv", index=False)
+    volume.commit()
+    return {"datasets": len(curves), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_survival_search(
+    data: str = "processed/all_dms.parquet",
+    survival_curves: str = "outputs/tables/large_deviation_survival.csv",
+    boundaries_csv: str = "outputs/tables/phase_boundaries.csv",
+    out: str = "outputs/tables/survival_search_frontier.csv",
+    survival_col: str = "survival_large_deviation",
+    budget: int = 50,
+    repeats: int = 5,
+    beta_grid: str = "0,0.01,0.03,0.05",
+    gamma_grid: str = "0.1,0.3,0.5,1.0",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.survival_search import run_survival_search_benchmark
+
+    def parse_grid(text: str) -> list[float]:
+        return [float(x) for x in text.split(",") if x.strip()]
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    curves = pd.read_csv(Path(VOLUME_PATH) / survival_curves)
+    boundaries = {}
+    bd_path = Path(VOLUME_PATH) / boundaries_csv
+    if bd_path.exists():
+        bd = pd.read_csv(bd_path)
+        boundaries = {
+            r["dataset_id"]: {"dc": r["dc"], "alpha": r["alpha"], "dc_true": r["dc"]}
+            for _, r in bd.iterrows()
+        }
+    datasets = {ds: sub.reset_index(drop=True) for ds, sub in df.groupby("dataset_id")}
+    curve_dict = {ds: sub.reset_index(drop=True) for ds, sub in curves.groupby("dataset_id")}
+    out_df = run_survival_search_benchmark(
+        datasets=datasets,
+        survival_curves=curve_dict,
+        boundaries=boundaries,
+        budget=budget,
+        seeds=range(repeats),
+        beta_grid=parse_grid(beta_grid),
+        gamma_grid=parse_grid(gamma_grid),
+        survival_col=survival_col,
+    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 4)
+def run_active_spectral_phaseagent(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/tables/active_spectral_phaseagent.csv",
+    policy_name: str = "mutual_information_phaseagent",
+    initial_n: int = 20,
+    batch_size: int = 10,
+    steps: int = 20,
+    repeats: int = 10,
+    datasets: str = "",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.active_phaseagent import POLICIES
+    from phaseagent.agents import simulate_boundary_discovery
+
+    class FunctionPolicy:
+        def __init__(self, name, fn):
+            self.name = name
+            self.fn = fn
+
+        def select_batch(self, observed_df, pool_df, batch_size):
+            try:
+                return self.fn(observed_df, pool_df, batch_size, seed=0)
+            except TypeError:
+                return self.fn(observed_df, pool_df, batch_size)
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    ds_filter = [s for s in datasets.split(",") if s.strip()]
+    if ds_filter:
+        df = df[df["dataset_id"].isin(ds_filter)]
+    policy = FunctionPolicy(policy_name, POLICIES[policy_name])
+    rows = []
+    for ds_id, sub in df.groupby("dataset_id"):
+        if sub["mutation_distance"].nunique() < 3:
+            continue
+        sim = simulate_boundary_discovery(
+            sub.reset_index(drop=True),
+            policy=policy,
+            initial_n=initial_n,
+            batch_size=batch_size,
+            n_steps=steps,
+            n_repeats=repeats,
+        )
+        sim["dataset_id"] = ds_id
+        rows.append(sim)
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def make_advanced_figures(
+    data: str = "processed/all_dms.parquet",
+    single_effects: str = "outputs/spectral/single_mutant_effects.parquet",
+    survival_curves: str = "outputs/tables/large_deviation_survival.csv",
+    search_results: str = "outputs/tables/survival_search_frontier.csv",
+    out_dir: str = "outputs/figures_advanced",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.plots_advanced import (
+        plot_distance_shell_histogram,
+        plot_search_frontier,
+        plot_spectrum_histograms,
+        plot_survival_curves,
+    )
+
+    out = Path(VOLUME_PATH) / out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    made = []
+    data_path = Path(VOLUME_PATH) / data
+    if data_path.exists():
+        made.append(plot_distance_shell_histogram(pd.read_parquet(data_path), out / "fig1_distance_shell_histogram.png"))
+    effects_path = Path(VOLUME_PATH) / single_effects
+    if effects_path.exists():
+        made.append(plot_spectrum_histograms(pd.read_parquet(effects_path), out / "fig2_spectrum_histograms.png"))
+    curves_path = Path(VOLUME_PATH) / survival_curves
+    if curves_path.exists():
+        curves = pd.read_csv(curves_path)
+        true_col = "survival_true" if "survival_true" in curves.columns else "survival_additive_mc"
+        made.append(plot_survival_curves(curves, out / "fig3_survival_curves.png", true_col=true_col, pred_col="survival_large_deviation"))
+    search_path = Path(VOLUME_PATH) / search_results
+    if search_path.exists():
+        made.append(plot_search_frontier(pd.read_csv(search_path), out / "fig7_search_frontier.png"))
+    volume.commit()
+    return {"figures": len(made), "out": str(out)}
+
+
+# ---------- 9. EditGuard-Diff ICML path ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def build_edit_splits(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/editguard/edit_splits.csv",
+    seed: int = 0,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_splits import make_dataset_splits
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    splits = make_dataset_splits(df["dataset_id"].unique(), seed=seed)
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    splits.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(splits)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def build_edit_tasks(
+    data: str = "processed/all_dms.parquet",
+    out: str = "outputs/editguard/edit_tasks.csv",
+    budgets: str = "1,2,3,5",
+    objectives: str = "novelty,fragility_aware,motif_avoidance",
+    min_candidates: int = 20,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.editing_tasks import build_editing_tasks
+
+    def parse_ints(text: str) -> list[int]:
+        return [int(x) for x in text.split(",") if x.strip()]
+
+    def parse_strs(text: str) -> list[str]:
+        return [x.strip() for x in text.split(",") if x.strip()]
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = build_editing_tasks(
+        df,
+        budgets=parse_ints(budgets),
+        objectives=parse_strs(objectives),
+        min_candidates=min_candidates,
+    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tasks.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(tasks)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def train_editguard_prior(
+    data: str = "processed/all_dms.parquet",
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    model_out: str = "outputs/editguard/editguard_prior.pkl",
+    metrics_out: str = "outputs/editguard/editguard_prior_metrics.csv",
+    n_estimators: int = 200,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_splits import add_splits
+    from phaseagent.editguard_prior import DMSFunctionPrior, evaluate_prior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    splits = pd.read_csv(Path(VOLUME_PATH) / splits_csv)
+    labeled = add_splits(df, splits)
+    train = labeled[labeled["split"] == "train"]
+    val = labeled[labeled["split"] == "val"]
+    prior = DMSFunctionPrior(n_estimators=n_estimators).fit(train, calibrate_df=val)
+    model_path = Path(VOLUME_PATH) / model_out
+    prior.save(model_path)
+    rows = []
+    for split, sub in labeled.groupby("split"):
+        rows.append({"split": split, **evaluate_prior(prior, sub)})
+    metrics_path = Path(VOLUME_PATH) / metrics_out
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(metrics_path, index=False)
+    volume.commit()
+    return {"model": str(model_path), "metrics": str(metrics_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_edit_baselines(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/edit_baseline_metrics.csv",
+    selections_out: str = "outputs/editguard/edit_baseline_selections.parquet",
+    external_candidates: Optional[str] = None,
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_baselines import run_edit_baselines as run_one
+    from phaseagent.edit_eval import evaluate_methods
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    external = None
+    if external_candidates:
+        ext_path = Path(VOLUME_PATH) / external_candidates
+        external = pd.read_parquet(ext_path) if ext_path.suffix == ".parquet" else pd.read_csv(ext_path)
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed)
+            else:
+                pool_run = pool
+            selections = run_one(pool_run, task, prior, k=k, seed=seed, external_candidates=external)
+            metrics = evaluate_methods(selections, task)
+            metrics["task_idx"] = int(task_idx)
+            metrics["dataset_id"] = task.dataset_id
+            metrics["objective"] = task.objective
+            metrics["edit_budget"] = task.edit_budget
+            metrics["seed"] = seed
+            metric_rows.append(metrics)
+            for method, sel in selections.items():
+                tmp = sel.copy()
+                tmp["task_idx"] = int(task_idx)
+                tmp["method"] = method
+                tmp["seed"] = seed
+                selection_rows.append(tmp)
+    out_df = pd.concat(metric_rows, ignore_index=True) if metric_rows else pd.DataFrame()
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(Path(VOLUME_PATH) / selections_out, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_editguard_diffusion(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/editguard_diffusion_metrics.csv",
+    selections_out: str = "outputs/editguard/editguard_diffusion_selections.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.editguard_diffusion import DiffusionSampleConfig, MeasuredPoolEditDiffusion
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    sampler = MeasuredPoolEditDiffusion(prior)
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed)
+            else:
+                pool_run = pool
+            selected = sampler.sample(pool_run, task, DiffusionSampleConfig(n_samples=k, seed=seed))
+            metric_rows.append(
+                {
+                    "task_idx": int(task_idx),
+                    "dataset_id": task.dataset_id,
+                    "objective": task.objective,
+                    "edit_budget": task.edit_budget,
+                    "seed": seed,
+                    "method": "editguard_diffusion",
+                    **evaluate_edit_selection(selected, task),
+                }
+            )
+            tmp = selected.copy()
+            tmp["task_idx"] = int(task_idx)
+            tmp["seed"] = seed
+            selection_rows.append(tmp)
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(Path(VOLUME_PATH) / selections_out, index=False)
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_editguard_ablations(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/editguard_ablation_metrics.csv",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 50,
+    max_candidates: int = 10000,
+) -> dict:
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+    from phaseagent.editguard_sampling import guided_scores
+
+    configs = {
+        "default": {"alpha": 1.0, "beta": 0.5, "gamma": 2.0, "kappa": 0.0},
+        "no_dms_guidance": {"alpha": 0.0, "beta": 0.5, "gamma": 2.0, "kappa": 0.0},
+        "no_objective": {"alpha": 1.0, "beta": 0.0, "gamma": 2.0, "kappa": 0.0},
+        "uncertainty_penalty": {"alpha": 1.0, "beta": 0.5, "gamma": 2.0, "kappa": 0.5},
+        "strong_dms_guidance": {"alpha": 2.0, "beta": 0.5, "gamma": 2.0, "kappa": 0.0},
+    }
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    metric_rows = []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed)
+            else:
+                pool_run = pool
+            base_scored = guided_scores(pool_run, task, prior, alpha=1.0, beta=0.5, gamma=2.0, kappa=0.0)
+            for name, cfg in configs.items():
+                energy = (
+                    -cfg["alpha"] * np.log(base_scored["prior_function_prob"].clip(1e-6, 1.0))
+                    -cfg["beta"] * base_scored["objective_score"]
+                    +cfg["gamma"] * (~base_scored["constraint_satisfied"]).astype(float)
+                    +cfg["kappa"] * base_scored["prior_uncertainty"]
+                )
+                selected = base_scored.assign(editguard_energy=energy).nsmallest(min(k, len(base_scored)), "editguard_energy")
+                metric_rows.append(
+                    {
+                        "task_idx": int(task_idx),
+                        "dataset_id": task.dataset_id,
+                        "objective": task.objective,
+                        "edit_budget": task.edit_budget,
+                        "seed": seed,
+                        "method": "editguard_diffusion",
+                        "ablation": name,
+                        **evaluate_edit_selection(selected, task),
+                    }
+                )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)
+def run_guided_generation(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/guided_generation_metrics.csv",
+    selections_out: str = "outputs/editguard/guided_generation_selections.parquet",
+    k: int = 50,
+    n_generate: int = 500,
+    seeds: int = 3,
+    max_tasks: int = 20,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_generated_selection
+    from phaseagent.edit_generators import (
+        ProposalConfig,
+        generate_many_then_rerank,
+        guided_local_generation,
+        infer_wildtype_sequence,
+        join_generated_to_dms,
+        observed_single_mutation_tokens,
+        sample_random_edit_candidates,
+    )
+    from phaseagent.editing_tasks import task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    metrics, selections = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        wt = infer_wildtype_sequence(df, task.dataset_id)
+        if wt is None:
+            continue
+        allowed_tokens = observed_single_mutation_tokens(df, task)
+        for seed in range(seeds):
+            methods = {}
+            random_props = sample_random_edit_candidates(
+                task.dataset_id,
+                wt,
+                task,
+                ProposalConfig(n_candidates=k, seed=seed),
+                source="random_direct_generation",
+                allowed_tokens=allowed_tokens,
+            )
+            random_props["method"] = "random_direct_generation"
+            methods["random_direct_generation"] = random_props
+            methods[f"generate_{n_generate}_then_rerank"] = generate_many_then_rerank(
+                task.dataset_id,
+                wt,
+                task,
+                prior,
+                n_generate=n_generate,
+                k=k,
+                seed=seed,
+                allowed_tokens=allowed_tokens,
+            )
+            guided = guided_local_generation(
+                task.dataset_id,
+                wt,
+                task,
+                prior,
+                ProposalConfig(n_candidates=k, seed=seed),
+                allowed_tokens=allowed_tokens,
+            )
+            guided["method"] = "guided_local_generation"
+            methods["guided_local_generation"] = guided
+            for method, generated in methods.items():
+                labeled = join_generated_to_dms(generated, df)
+                labeled["task_idx"] = int(task_idx)
+                labeled["seed"] = seed
+                labeled["method"] = method
+                selections.append(labeled)
+                metrics.append(
+                    {
+                        "task_idx": int(task_idx),
+                        "dataset_id": task.dataset_id,
+                        "objective": task.objective,
+                        "edit_budget": task.edit_budget,
+                        "seed": seed,
+                        "method": method,
+                        "n_generated": int(n_generate if "then_rerank" in method else k),
+                        **evaluate_generated_selection(labeled, task),
+                    }
+                )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metrics).to_csv(out_path, index=False)
+    if selections:
+        pd.concat(selections, ignore_index=True).to_parquet(Path(VOLUME_PATH) / selections_out, index=False)
+    volume.commit()
+    return {"rows": int(len(metrics)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 4)
+def run_guided_generation_sweep(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/guided_generation_sweep_metrics.csv",
+    candidate_budgets: str = "20,50,100,200,500",
+    seeds: int = 5,
+    max_tasks: int = 0,
+    coverage_mode: str = "dms_evaluable",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_generated_selection
+    from phaseagent.edit_generators import (
+        ProposalConfig,
+        generate_many_then_rerank,
+        guided_local_generation,
+        infer_wildtype_sequence,
+        join_generated_to_dms,
+        observed_single_mutation_tokens,
+        plm_masked_proposal_generation,
+        sample_random_edit_candidates,
+    )
+    from phaseagent.editing_tasks import task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    budgets = [int(x) for x in candidate_budgets.split(",") if x.strip()]
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    rows = []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        wt = infer_wildtype_sequence(df, task.dataset_id)
+        if wt is None:
+            continue
+        allowed = observed_single_mutation_tokens(df, task) if coverage_mode == "dms_evaluable" else None
+        for budget in budgets:
+            for seed in range(seeds):
+                methods = {
+                    "random_direct_generation": sample_random_edit_candidates(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        ProposalConfig(n_candidates=budget, seed=seed, coverage_mode=coverage_mode),
+                        source="random_direct_generation",
+                        allowed_tokens=allowed,
+                    ),
+                    "guided_local_generation": guided_local_generation(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        prior,
+                        ProposalConfig(n_candidates=budget, seed=seed, coverage_mode=coverage_mode),
+                        allowed_tokens=allowed,
+                    ),
+                    "esm2_masked_marginal_proxy": plm_masked_proposal_generation(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        n_candidates=budget,
+                        seed=seed,
+                        allowed_tokens=allowed,
+                    ),
+                    f"generate_{budget * 10}_then_rerank": generate_many_then_rerank(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        prior,
+                        n_generate=budget * 10,
+                        k=budget,
+                        seed=seed,
+                        allowed_tokens=allowed,
+                    ),
+                }
+                for method, generated in methods.items():
+                    labeled = join_generated_to_dms(generated, df)
+                    labeled["method"] = method
+                    rows.append(
+                        {
+                            "task_idx": int(task_idx),
+                            "dataset_id": task.dataset_id,
+                            "objective": task.objective,
+                            "edit_budget": task.edit_budget,
+                            "seed": seed,
+                            "method": method,
+                            "candidate_budget": budget,
+                            "n_generated": int(budget * 10 if "then_rerank" in method else budget),
+                            "coverage_mode": coverage_mode,
+                            **evaluate_generated_selection(labeled, task),
+                        }
+                    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(rows)), "out": str(out_path)}
+
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 4)
+def run_esm_guided_generation_sweep(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/esm_guided_generation_sweep_metrics.csv",
+    selections_out: str = "outputs/editguard/esm_guided_generation_sweep_selections.parquet",
+    candidate_budgets: str = "20,50",
+    seeds: int = 1,
+    max_tasks: int = 3,
+    coverage_mode: str = "dms_evaluable",
+    model_name: str = "esm2_t6_8M_UR50D",
+    esm_batch_size: int = 4,
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_generated_selection
+    from phaseagent.edit_generators import (
+        ProposalConfig,
+        generate_many_then_rerank,
+        guided_local_generation,
+        infer_wildtype_sequence,
+        join_generated_to_dms,
+        observed_single_mutation_tokens,
+        rerank_by_column,
+        sample_random_edit_candidates,
+    )
+    from phaseagent.editing_tasks import task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+    from phaseagent.plm import score_generated_esm_masked
+
+    budgets = [int(x) for x in candidate_budgets.split(",") if x.strip()]
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        wt = infer_wildtype_sequence(df, task.dataset_id)
+        if wt is None:
+            continue
+        allowed = observed_single_mutation_tokens(df, task) if coverage_mode == "dms_evaluable" else None
+        for budget in budgets:
+            for seed in range(seeds):
+                proposal_pool = sample_random_edit_candidates(
+                    task.dataset_id,
+                    wt,
+                    task,
+                    ProposalConfig(n_candidates=budget * 10, seed=seed, coverage_mode=coverage_mode),
+                    source="esm_masked_candidate_pool",
+                    allowed_tokens=allowed,
+                )
+                proposal_pool = score_generated_esm_masked(
+                    proposal_pool,
+                    model_name=model_name,
+                    batch_size=esm_batch_size,
+                )
+                esm_direct = rerank_by_column(proposal_pool, "esm_masked_score", budget, "esm2_masked_marginal")
+                esm_dms = proposal_pool.copy()
+                if len(esm_dms):
+                    esm_dms["prior_function_prob"] = prior.predict_proba(esm_dms)
+                    esm_dms = esm_dms.nlargest(min(budget, len(esm_dms)), "prior_function_prob")
+                    esm_dms["method"] = "esm2_masked_marginal_dms_rerank"
+                methods = {
+                    "esm2_masked_marginal": esm_direct,
+                    "esm2_masked_marginal_dms_rerank": esm_dms,
+                    "guided_local_generation": guided_local_generation(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        prior,
+                        ProposalConfig(n_candidates=budget, seed=seed, coverage_mode=coverage_mode),
+                        allowed_tokens=allowed,
+                    ),
+                    f"generate_{budget * 10}_then_rerank": generate_many_then_rerank(
+                        task.dataset_id,
+                        wt,
+                        task,
+                        prior,
+                        n_generate=budget * 10,
+                        k=budget,
+                        seed=seed,
+                        allowed_tokens=allowed,
+                    ),
+                }
+                for method, generated in methods.items():
+                    labeled = join_generated_to_dms(generated, df)
+                    labeled["method"] = method
+                    labeled["task_idx"] = int(task_idx)
+                    labeled["seed"] = seed
+                    labeled["candidate_budget"] = budget
+                    selection_rows.append(labeled)
+                    metric_rows.append(
+                        {
+                            "task_idx": int(task_idx),
+                            "dataset_id": task.dataset_id,
+                            "objective": task.objective,
+                            "edit_budget": task.edit_budget,
+                            "seed": seed,
+                            "method": method,
+                            "candidate_budget": budget,
+                            "n_generated": int(budget * 10 if "then_rerank" in method or method.startswith("esm2") else budget),
+                            "coverage_mode": coverage_mode,
+                            **evaluate_generated_selection(labeled, task),
+                        }
+                    )
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(Path(VOLUME_PATH) / selections_out, index=False)
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def run_prompted_edit_demos(
+    data: str = "processed/all_dms.parquet",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/prompted_edit_demos.csv",
+    dataset_ids: str = "",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_prompts import generate_prompted_edits, parse_edit_prompt
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    candidates = [x.strip() for x in dataset_ids.split(",") if x.strip()]
+    if not candidates:
+        preferred = ("BRCA", "PTEN", "P53", "TP53", "GFP", "AAV")
+        candidates = [ds for ds in df["dataset_id"].dropna().astype(str).unique() if any(p in ds.upper() for p in preferred)]
+        candidates = candidates[:5] if candidates else list(df["dataset_id"].dropna().astype(str).unique()[:5])
+    prompts = [
+        "Generate a high-novelty variant while preserving function.",
+        "Avoid DMS-fragile positions while preserving function.",
+        "Remove cysteine liabilities while protecting known functional residues.",
+        "Create a 2 mutation variant using single-mutant DMS guidance.",
+    ]
+    rows = []
+    for ds_id in candidates:
+        for prompt_idx, prompt in enumerate(prompts):
+            req = parse_edit_prompt(ds_id, prompt, edit_budget=2 if "2 mutation" in prompt else 3, n_candidates=10)
+            generated = generate_prompted_edits(df, prior, req, seed=prompt_idx)
+            if len(generated) == 0:
+                continue
+            generated["prompt_idx"] = prompt_idx
+            rows.append(generated.head(5))
+    out_df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(out_df)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=600)
+def export_baseline_registry(out: str = "outputs/editguard/baseline_registry.csv") -> dict:
+    from phaseagent.edit_sota import baseline_registry_frame
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df = baseline_registry_frame()
+    df.to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(df)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=600)
+def run_structure_sanity_report(
+    selections: str = "outputs/editguard/prompted_edit_demos.csv",
+    out: str = "outputs/editguard/structure_sanity_report.csv",
+    mutation_out: str = "outputs/editguard/structure_mutation_positions.csv",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_structure_sanity import mutation_position_table, structure_sanity_stub
+
+    in_path = Path(VOLUME_PATH) / selections
+    if not in_path.exists() or in_path.stat().st_size == 0:
+        report = pd.DataFrame()
+        muts = pd.DataFrame()
+    else:
+        generated = pd.read_csv(in_path)
+        report = structure_sanity_stub(generated)
+        muts = mutation_position_table(generated)
+    out_path = Path(VOLUME_PATH) / out
+    mut_path = Path(VOLUME_PATH) / mutation_out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    report.to_csv(out_path, index=False)
+    muts.to_csv(mut_path, index=False)
+    volume.commit()
+    return {"rows": int(len(report)), "mutations": int(len(muts)), "out": str(out_path)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
+def make_editguard_figures(
+    baseline_results: str = "outputs/editguard/edit_baseline_metrics.csv",
+    diffusion_results: str = "outputs/editguard/editguard_diffusion_metrics.csv",
+    out_dir: str = "outputs/editguard/figures",
+) -> dict:
+    import pandas as pd
+
+    from phaseagent.edit_plots import (
+        plot_ablation_bar,
+        plot_editing_frontier,
+        plot_coverage_vs_hit_rate,
+        plot_fig2_replacement,
+        plot_grouped_metric_bars,
+        plot_method_boxplot,
+        plot_sample_efficiency,
+    )
+
+    frames = []
+    for rel in [baseline_results, diffusion_results]:
+        path = Path(VOLUME_PATH) / rel
+        if path.exists():
+            frames.append(pd.read_csv(path))
+    results = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    out = Path(VOLUME_PATH) / out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    if len(results):
+        plot_fig2_replacement(results, out / "fig2_method_summary")
+        plot_editing_frontier(results, out / "fig2_editing_frontier")
+        plot_method_boxplot(results, out / "fig4_functional_hit_boxplot")
+        if "edit_budget" in results.columns:
+            plot_grouped_metric_bars(results, out / "fig2_grouped_hit_rate_by_budget")
+    ablation_candidates = [
+        Path(VOLUME_PATH) / "outputs/editguard/editguard_ablation_metrics.csv",
+        Path(VOLUME_PATH) / "outputs/editguard/editguard_ablation_fast_metrics.csv",
+        Path(VOLUME_PATH) / "outputs/editguard/editguard_ablation_smoke_metrics.csv",
+    ]
+    ablation_path = next((p for p in ablation_candidates if p.exists()), None)
+    if ablation_path is not None:
+        ablations = pd.read_csv(ablation_path)
+        if len(ablations):
+            plot_ablation_bar(ablations, out / "fig6_guidance_ablation")
+    generation_candidates = [
+        Path(VOLUME_PATH) / "outputs/editguard/guided_generation_metrics.csv",
+        Path(VOLUME_PATH) / "outputs/editguard/guided_generation_fast_metrics.csv",
+    ]
+    generation_path = next((p for p in generation_candidates if p.exists() and p.stat().st_size > 0), None)
+    if generation_path is not None:
+        generation = pd.read_csv(generation_path)
+        if len(generation):
+            plot_sample_efficiency(generation, out / "fig3_guided_generation_sample_efficiency")
+            plot_coverage_vs_hit_rate(generation, out / "fig8_label_coverage_vs_hit_rate")
+    sweep_path = Path(VOLUME_PATH) / "outputs/editguard/guided_generation_sweep_metrics.csv"
+    if sweep_path.exists() and sweep_path.stat().st_size > 0:
+        sweep = pd.read_csv(sweep_path)
+        if len(sweep):
+            plot_sample_efficiency(sweep, out / "fig3_sample_efficiency_sweep")
+            plot_coverage_vs_hit_rate(sweep, out / "fig8_sweep_coverage_vs_hit_rate")
+    esm_sweep_path = Path(VOLUME_PATH) / "outputs/editguard/esm_guided_generation_sweep_metrics.csv"
+    if esm_sweep_path.exists() and esm_sweep_path.stat().st_size > 0:
+        esm_sweep = pd.read_csv(esm_sweep_path)
+        if len(esm_sweep):
+            plot_sample_efficiency(esm_sweep, out / "fig3_esm_sota_sample_efficiency")
+            plot_coverage_vs_hit_rate(esm_sweep, out / "fig8_esm_sota_coverage_vs_hit_rate")
+    volume.commit()
+    return {"figures": 2 if len(results) else 0, "out": str(out)}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=600)
+def summarize_editguard_outputs(rel_dir: str = "outputs/editguard") -> dict:
+    import pandas as pd
+
+    base = Path(VOLUME_PATH) / rel_dir
+    summary = {}
+    for name in [
+        "edit_splits.csv",
+        "edit_tasks.csv",
+        "editguard_prior_metrics.csv",
+        "edit_baseline_metrics.csv",
+        "editguard_diffusion_metrics.csv",
+        "editguard_ablation_metrics.csv",
+        "editguard_ablation_fast_metrics.csv",
+        "editguard_ablation_smoke_metrics.csv",
+        "guided_generation_metrics.csv",
+        "guided_generation_fast_metrics.csv",
+        "guided_generation_sweep_metrics.csv",
+        "esm_guided_generation_sweep_metrics.csv",
+        "prompted_edit_demos.csv",
+        "structure_sanity_report.csv",
+        "baseline_registry.csv",
+    ]:
+        path = base / name
+        if not path.exists():
+            print(f"[missing] {name}")
+            continue
+        if path.stat().st_size == 0:
+            print(f"[empty] {name}")
+            summary[name] = {"rows": 0, "cols": 0}
+            continue
+        df = pd.read_csv(path)
+        summary[name] = {"rows": int(len(df)), "cols": int(len(df.columns))}
+        print(f"[artifact] {name}: rows={len(df)} cols={len(df.columns)}")
+        if name == "editguard_prior_metrics.csv":
+            print(df.to_string(index=False))
+        if "metrics" in name and "method" in df.columns and "functional_hit_rate" in df.columns:
+            means = df.groupby("method")["functional_hit_rate"].agg(["mean", "count"]).sort_values("mean", ascending=False)
+            print(means.to_string())
+        if name.startswith("guided_generation") and "functional_hit_rate_labeled" in df.columns:
+            cols = ["functional_hit_rate_labeled", "labeled_fraction", "n_generated"]
+            means = df.groupby("method")[cols].agg(["mean", "count"])
+            print(means.to_string())
+        if name == "baseline_registry.csv":
+            print(df.groupby(["tier", "status"]).size().to_string())
+    fig_dir = base / "figures"
+    figures = sorted(str(p.relative_to(base)) for p in fig_dir.rglob("*") if p.is_file()) if fig_dir.exists() else []
+    summary["figures"] = figures
+    print("[figures]")
+    for fig in figures:
+        print(fig)
+    return summary
+
+
+# ---------- 10. Pull outputs back to local ----------
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=600)
+def list_outputs(rel_dir: str = "outputs") -> list[str]:
+    base = Path(VOLUME_PATH) / rel_dir
+    return [str(p.relative_to(VOLUME_PATH)) for p in base.rglob("*") if p.is_file()]
+
+
+@app.local_entrypoint()
+def main(
+    skip_download: bool = False,
+    skip_plm: bool = False,
+    n_datasets: int = 0,
+):
+    n_datasets_arg = n_datasets if n_datasets > 0 else None
+    """End-to-end pipeline. Pass --skip-plm to leave the GPU step out."""
+    if not skip_download:
+        print("[1/7] download_proteingym")
+        download_proteingym.remote()
+    print("[2/7] build_dataset")
+    build_dataset.remote(n_datasets=n_datasets_arg)
+    print("[3/7] run_phase_atlas")
+    run_phase_atlas.remote()
+    print("[4/7] run_phaseagent")
+    run_phaseagent.remote()
+    print("[5/7] run_phase_aware_search")
+    run_phase_aware_search.remote()
+    if not skip_plm:
+        print("[6/7] run_plm_scoring (GPU)")
+        run_plm_scoring.remote()
+    print("[7/7] make_figures")
+    make_figures.remote()
+    print("done. Pull outputs with `modal volume get phaseagent-data outputs ./outputs`.")
