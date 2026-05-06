@@ -4,20 +4,16 @@ PhaseAgent-lite estimates functional phase boundaries in protein fitness landsca
 
 All compute runs on **Modal** — a persistent volume (`phaseagent-data`) holds raw DMS CSVs, the processed parquet, result tables, and figures. Real ProteinGym v1.3 substitution data is the only input; there is no synthetic-data fallback.
 
-## Spectral PhaseAgent Upgrade
+## Project status (May 2026)
 
-The advanced path reframes the project around shallow-to-deep designability prediction: use a protein's single-mutant effect spectrum to estimate a survival curve `V(d) = P(functional | mutation_distance=d)`. The new modules add spectrum extraction, additive/large-deviation survival baselines, posterior-aware active querying, and survival-aware design scores:
-
-```bash
-python scripts/build_spectra.py --data data/processed/all_dms.parquet --out-dir outputs/spectral
-python scripts/run_large_deviation.py --data data/processed/all_dms.parquet --out outputs/tables/large_deviation_survival.csv
-python scripts/eval_survival_model.py --data data/processed/all_dms.parquet --predictions outputs/tables/large_deviation_survival.csv --out outputs/tables/large_deviation_eval.csv --pred-col survival_large_deviation
-python scripts/run_survival_search.py --data data/processed/all_dms.parquet --survival-curves outputs/tables/large_deviation_survival.csv --boundaries outputs/tables/phase_boundaries.csv --out outputs/tables/survival_search_frontier.csv
-python scripts/run_active_spectral_phaseagent.py --data data/processed/all_dms.parquet --out outputs/tables/active_spectral_phaseagent.csv
-python scripts/make_advanced_figures.py --data data/processed/all_dms.parquet --single-effects outputs/spectral/single_mutant_effects.parquet --survival-curves outputs/tables/large_deviation_survival.csv --search-results outputs/tables/survival_search_frontier.csv --out-dir outputs/figures_advanced
-```
-
-The neural Spectral Transformer and structure-aware extensions are scaffolded as optional PyTorch modules. The deterministic baseline path above is the first reproducible milestone and does not require GPU dependencies.
+The active scientific story is **EditGuard** — a DMS-conditioned protein
+editing benchmark and guidance framework. The PhaseAgent boundary atlas
+described above remains in the codebase but is not the current submission;
+its neural-Spectral-Transformer and structure-aware GNN scaffolds have been
+moved to `src/phaseagent/_experimental/` and are not wired into any
+EditGuard claim. See `RUNBOOK.md` (forthcoming) for the EditGuard pipeline
+and `/Users/vincentyip/.claude/plans/sparkling-watching-beaver.md` for the
+implementation plan.
 
 ## Setup
 

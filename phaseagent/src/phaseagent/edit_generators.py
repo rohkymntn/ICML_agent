@@ -388,7 +388,7 @@ def rerank_by_column(
     return out.reset_index(drop=True)
 
 
-def plm_masked_proposal_generation(
+def aa_frequency_proposal_baseline(
     dataset_id: str,
     wt_sequence: str,
     task: EditingTask,
@@ -396,11 +396,14 @@ def plm_masked_proposal_generation(
     seed: int = 0,
     allowed_tokens: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
-    """Lightweight PLM-style masked proposal placeholder.
+    """Static amino-acid frequency baseline.
 
-    This uses a conservative amino-acid naturalness prior when true ESM logits
-    are not available. The interface is intentionally the same shape as future
-    ESM/DPLM adapters, so stronger backbones can replace the proposal scores.
+    Scores random edits by ``log P_swissprot(mutant_aa)`` using a hard-coded
+    SwissProt-derived AA frequency table. This is *not* a PLM and should not
+    be presented as one — for a real ESM-2 masked-marginal baseline, use
+    ``plm.masked_token_log_probs`` (loads the ESM-2 checkpoint on GPU).
+
+    The output method label is ``aa_frequency_proposal``.
     """
     aa_freq = {
         "A": 0.0825, "R": 0.0553, "N": 0.0406, "D": 0.0545, "C": 0.0137,
@@ -413,7 +416,7 @@ def plm_masked_proposal_generation(
         wt_sequence,
         task,
         ProposalConfig(n_candidates=max(n_candidates * 5, n_candidates), seed=seed),
-        source="plm_masked_marginal_proxy",
+        source="aa_frequency_proposal",
         allowed_tokens=allowed_tokens,
     )
     if len(proposals) == 0:
@@ -425,10 +428,14 @@ def plm_masked_proposal_generation(
             scores.append(0.0)
         else:
             scores.append(float(np.mean([np.log(aa_freq.get(tok[-1].upper(), 1e-4)) for tok in toks])))
-    proposals["plm_proxy_score"] = scores
-    proposals = proposals.nlargest(min(n_candidates, len(proposals)), "plm_proxy_score").copy()
-    proposals["method"] = "esm2_masked_marginal_proxy"
+    proposals["aa_freq_score"] = scores
+    proposals = proposals.nlargest(min(n_candidates, len(proposals)), "aa_freq_score").copy()
+    proposals["method"] = "aa_frequency_proposal"
     return proposals.reset_index(drop=True)
+
+
+# Backwards-compatibility alias for any external callers.
+plm_masked_proposal_generation = aa_frequency_proposal_baseline
 
 
 class DPLMInfillingAdapter:

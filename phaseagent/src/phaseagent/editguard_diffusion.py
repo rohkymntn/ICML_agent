@@ -1,8 +1,16 @@
-"""DPLM-style discrete edit diffusion interfaces for EditGuard.
+"""EditGuard sampling backbones.
 
-This module keeps the diffusion backbone pluggable. The first implementation is
-a measured-pool simulator used for reproducible DMS evaluation; a real DPLM
-adapter can implement the same ``sample`` interface once checkpoints are wired.
+The guidance framework is pluggable: ``DMSPoolGuidedSampler`` selects from a
+measured DMS candidate pool (a strong selection baseline, not a generative
+model); ``DPLMEditBackbone`` (Phase 2 of the implementation plan) generates
+sequences with a real masked discrete diffusion backbone and the same
+classifier-guidance interface.
+
+Method labels emitted by this module are deliberately specific: the DMS-pool
+sampler reports ``method = "dms_pool_guided"`` and the (future) DPLM-backed
+sampler reports ``method = "editguard_diffusion_dplm"``. The bare label
+``editguard_diffusion`` is reserved for the real DPLM-backed sampler and is
+no longer emitted by the DMS-pool surrogate.
 """
 from __future__ import annotations
 
@@ -40,12 +48,14 @@ class DPLMEditBackbone:
         )
 
 
-class MeasuredPoolEditDiffusion:
-    """DMS-measured candidate pool used as a controlled diffusion surrogate.
+class DMSPoolGuidedSampler:
+    """Softmax sampling from a measured DMS pool, scored by a DMS function prior.
 
-    This is not claimed as the final generative model. It lets the whole
-    EditGuard guidance/evaluation stack run against true DMS labels while the
-    DPLM adapter is integrated.
+    This is a *selection* method, not a generative model. It samples from the
+    measured candidate pool with probability proportional to the EditGuard
+    guided score (function prior × objective × constraints). It is included
+    in headline benchmarks as a strong selection baseline that has full
+    access to measured DMS pool labels.
     """
 
     def __init__(self, prior: DMSFunctionPrior):
@@ -70,6 +80,10 @@ class MeasuredPoolEditDiffusion:
             gamma=config.gamma,
             kappa=config.kappa,
         )
-        out["method"] = "editguard_diffusion"
-        out["diffusion_backbone"] = "measured_pool_surrogate"
+        out["method"] = "dms_pool_guided"
+        out["diffusion_backbone"] = "measured_pool"
         return out
+
+
+# Backwards-compatibility alias. New code should use DMSPoolGuidedSampler.
+MeasuredPoolEditDiffusion = DMSPoolGuidedSampler

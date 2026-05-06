@@ -20,22 +20,22 @@ class BaselineSpec:
 
 
 BASELINE_REGISTRY = (
-    BaselineSpec("random_direct_generation", "weak", "direct generator sanity check", False, False, False, False, True, "implemented"),
-    BaselineSpec("generate_many_then_rerank", "core", "post-hoc DMS reranking baseline", True, True, False, False, True, "implemented"),
-    BaselineSpec("guided_local_generation", "ours", "DMS guidance during generation", True, False, False, False, True, "implemented"),
-    BaselineSpec("esm2_masked_marginal", "sequence_generation", "PLM masked edit proposal", False, False, False, False, True, "proxy_implemented"),
-    BaselineSpec("esm2_masked_marginal_dms_rerank", "sequence_generation", "PLM proposal plus DMS rerank", True, True, False, False, True, "proxy_implemented"),
-    BaselineSpec("dplm_masked_infilling", "diffusion_generation", "DPLM masked infilling", False, False, False, False, True, "adapter_pending"),
-    BaselineSpec("dplm_dms_rerank", "diffusion_generation", "DPLM proposal plus DMS rerank", True, True, False, False, True, "adapter_pending"),
-    BaselineSpec("editguard_guided_dplm", "ours", "DMS-guided DPLM denoising", True, False, False, False, True, "adapter_pending"),
-    BaselineSpec("proteinmpnn", "structure_conditioned", "inverse folding baseline", False, False, True, False, True, "external_optional"),
-    BaselineSpec("proteinmpnn_dms_rerank", "structure_conditioned", "ProteinMPNN plus DMS rerank", True, True, True, False, True, "hook_implemented"),
-    BaselineSpec("ligandmpnn", "structure_conditioned", "ligand-aware inverse folding baseline", False, False, True, False, True, "external_optional"),
-    BaselineSpec("esm_if1", "structure_conditioned", "inverse folding baseline", False, False, True, False, True, "external_optional"),
-    BaselineSpec("tranception", "vep_ranker", "autoregressive VEP/ranking baseline", False, False, False, False, False, "external_optional"),
-    BaselineSpec("eve_evmutation_gemme", "vep_ranker", "MSA/evolutionary VEP baseline", False, False, False, True, False, "external_optional"),
-    BaselineSpec("adalead", "optimization", "local sequence optimization baseline", True, False, False, False, True, "planned"),
-    BaselineSpec("bayesian_optimization", "optimization", "mutation-token optimizer", True, False, False, False, True, "planned"),
+    BaselineSpec("random", "weak", "uniform random selection from measured DMS pool", False, False, False, False, False, "implemented"),
+    BaselineSpec("novelty", "weak", "highest mutation distance first", False, False, False, False, False, "implemented"),
+    BaselineSpec("objective_only", "weak", "task objective score, no DMS guidance", False, False, False, False, False, "implemented"),
+    BaselineSpec("aa_frequency_proposal", "weak", "swissprot AA-frequency baseline (NOT a PLM)", False, False, False, False, True, "implemented"),
+    BaselineSpec("random_direct_generation", "weak", "WT-anchored random substitution generator", False, False, False, False, True, "implemented"),
+    BaselineSpec("generate_many_then_rerank", "core", "random WT-anchored generator + DMS prior rerank", True, True, False, False, True, "implemented"),
+    BaselineSpec("guided_local_generation", "core", "DMS-guided WT-anchored generation", True, False, False, False, True, "implemented"),
+    BaselineSpec("dms_prior_rerank", "core", "DMS function prior rerank of measured pool", True, True, False, False, False, "implemented"),
+    BaselineSpec("editguard_guided", "ours", "guided selection (function prior + objective + constraints)", True, False, False, False, False, "implemented"),
+    BaselineSpec("dms_pool_guided", "ours", "softmax-sampled selection from measured pool with prior guidance", True, False, False, False, False, "implemented"),
+    BaselineSpec("esm2_masked_marginal", "sequence_generation", "real ESM-2 masked-marginal proposal (GPU)", False, False, False, False, True, "implemented"),
+    BaselineSpec("esm2_masked_marginal_dms_rerank", "sequence_generation", "real ESM-2 proposal + DMS prior rerank", True, True, False, False, True, "implemented"),
+    BaselineSpec("editguard_diffusion_dplm", "ours", "DMS-guided DPLM denoising (Phase 2 of plan)", True, False, False, False, True, "adapter_pending"),
+    BaselineSpec("proteinmpnn", "structure_conditioned", "inverse folding baseline", False, False, True, False, True, "phase2_planned"),
+    BaselineSpec("tranception_rerank", "vep_ranker", "Tranception score rerank (precomputed by ProteinGym)", False, True, False, False, False, "phase2_planned"),
+    BaselineSpec("eve_rerank", "vep_ranker", "EVE score rerank (precomputed by ProteinGym)", False, True, False, True, False, "phase2_planned"),
 )
 
 

@@ -1,4 +1,6 @@
+import numpy as np
 import pandas as pd
+import pytest
 
 from phaseagent.edit_baselines import run_edit_baselines
 from phaseagent.edit_eval import evaluate_methods
@@ -12,12 +14,17 @@ from phaseagent.edit_generators import (
     plm_masked_proposal_generation,
 )
 from phaseagent.edit_prompts import generate_prompted_edits, parse_edit_prompt
-from phaseagent.edit_splits import make_dataset_splits
+from phaseagent.edit_splits import (
+    VALID_SPLITS,
+    assert_tasks_in_split,
+    filter_by_split,
+    make_dataset_splits,
+)
 from phaseagent.edit_sota import baseline_registry_frame
 from phaseagent.edit_structure_sanity import mutation_position_table, structure_sanity_stub
 from phaseagent.editing_tasks import EditingTask, build_editing_tasks, candidate_pool_for_task
 from phaseagent.editguard_diffusion import DiffusionSampleConfig, MeasuredPoolEditDiffusion
-from phaseagent.editguard_prior import DMSFunctionPrior, evaluate_prior
+from phaseagent.editguard_prior import DMSFunctionPrior, FEATURE_DIM, evaluate_prior, featurize_variants
 
 
 def _toy_df():
@@ -115,9 +122,12 @@ def test_guided_generation_from_wildtype():
     assert len(reranked) == 5
     assert "prior_function_prob" in reranked.columns
 
-    plm_proxy = plm_masked_proposal_generation(task.dataset_id, wt, task, n_candidates=5, seed=0, allowed_tokens=allowed)
-    assert len(plm_proxy) == 5
-    assert "plm_proxy_score" in plm_proxy.columns
+    aa_freq = plm_masked_proposal_generation(task.dataset_id, wt, task, n_candidates=5, seed=0, allowed_tokens=allowed)
+    assert len(aa_freq) == 5
+    # Output is the AA-frequency baseline, not a real PLM. Method label and
+    # score column reflect that honestly.
+    assert "aa_freq_score" in aa_freq.columns
+    assert (aa_freq["method"] == "aa_frequency_proposal").all()
 
 
 def test_prompted_interface_and_registry():
@@ -137,6 +147,39 @@ def test_prompted_interface_and_registry():
     registry = baseline_registry_frame()
     assert {"name", "tier", "status"}.issubset(registry.columns)
     assert "guided_local_generation" in set(registry["name"])
+
+
+def test_featurize_variants_has_no_variant_identifier():
+    """Two variants with identical chemistry/positions must produce identical
+    feature vectors regardless of dataset_id or token order. Guards against
+    the notation/dataset-id hash features that previously enabled
+    train-set memorization."""
+    df = pd.DataFrame([
+        {"dataset_id": "DS_A", "mutation_notation": "M1A,L3V", "mutation_distance": 2,
+         "wildtype_sequence": "MXLY", "fitness_norm": 0.7, "viable": 1},
+        {"dataset_id": "DS_B", "mutation_notation": "M1A,L3V", "mutation_distance": 2,
+         "wildtype_sequence": "MXLY", "fitness_norm": 0.7, "viable": 1},
+        {"dataset_id": "DS_A", "mutation_notation": "L3V,M1A", "mutation_distance": 2,
+         "wildtype_sequence": "MXLY", "fitness_norm": 0.7, "viable": 1},
+    ])
+    X = featurize_variants(df)
+    assert X.shape == (3, FEATURE_DIM)
+    assert np.allclose(X[0], X[1]), "different dataset_ids must not change features"
+    assert np.allclose(X[0], X[2]), "token reorder must not change features"
+
+
+def test_split_helpers_assert_split_membership():
+    splits = pd.DataFrame({
+        "dataset_id": ["A", "B", "C"],
+        "split": ["train", "val", "test"],
+    })
+    test_tasks = pd.DataFrame({"dataset_id": ["C"], "objective": ["novelty"], "edit_budget": [1]})
+    assert_tasks_in_split(test_tasks, splits, "test")  # passes
+    mixed = pd.DataFrame({"dataset_id": ["A", "C"], "objective": ["novelty"] * 2, "edit_budget": [1, 1]})
+    with pytest.raises(ValueError, match="not in split"):
+        assert_tasks_in_split(mixed, splits, "test")
+    sub = filter_by_split(pd.DataFrame({"dataset_id": ["A", "B", "C"], "x": [1, 2, 3]}), splits, "val")
+    assert list(sub["dataset_id"]) == ["B"]
 
 
 def test_structure_sanity_report_helpers():

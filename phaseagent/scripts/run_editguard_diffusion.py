@@ -1,4 +1,11 @@
-"""Local CLI: run EditGuard guided diffusion surrogate on DMS pools."""
+"""Local CLI: run the DMS-pool guided sampler.
+
+This is the renamed-and-refactored ``editguard_diffusion`` entrypoint. It
+emits ``method=dms_pool_guided`` in metric rows and is a *selection*
+baseline, not a generative diffusion model. The bare name
+``editguard_diffusion`` is reserved for the future DPLM-backed sampler
+(Phase 2 of the implementation plan).
+"""
 from __future__ import annotations
 
 import argparse
@@ -11,8 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from phaseagent.edit_eval import evaluate_edit_selection  # noqa: E402
+from phaseagent.edit_splits import VALID_SPLITS, assert_tasks_in_split  # noqa: E402
 from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row  # noqa: E402
-from phaseagent.editguard_diffusion import DiffusionSampleConfig, MeasuredPoolEditDiffusion  # noqa: E402
+from phaseagent.editguard_diffusion import DMSPoolGuidedSampler, DiffusionSampleConfig  # noqa: E402
 from phaseagent.editguard_prior import DMSFunctionPrior  # noqa: E402
 
 
@@ -27,14 +35,24 @@ def main():
     p.add_argument("--seeds", type=int, default=5)
     p.add_argument("--max-tasks", type=int, default=0)
     p.add_argument("--max-candidates", type=int, default=10000)
+    p.add_argument("--splits", help="Path to edit_splits.csv. Required with --require-split.")
+    p.add_argument(
+        "--require-split",
+        choices=VALID_SPLITS,
+        help="Fail if tasks reference any dataset outside this split.",
+    )
     args = p.parse_args()
 
     df = pd.read_parquet(args.data)
     tasks = pd.read_csv(args.tasks)
+    if args.require_split:
+        if not args.splits:
+            p.error("--require-split needs --splits")
+        assert_tasks_in_split(tasks, pd.read_csv(args.splits), args.require_split)
     if args.max_tasks > 0:
         tasks = tasks.head(args.max_tasks)
     prior = DMSFunctionPrior.load(args.prior)
-    sampler = MeasuredPoolEditDiffusion(prior)
+    sampler = DMSPoolGuidedSampler(prior)
     metric_rows, selection_rows = [], []
     for task_idx, row in tasks.iterrows():
         task = task_from_row(row)
@@ -55,7 +73,7 @@ def main():
                     "objective": task.objective,
                     "edit_budget": task.edit_budget,
                     "seed": seed,
-                    "method": "editguard_diffusion",
+                    "method": "dms_pool_guided",
                     **evaluate_edit_selection(selected, task),
                 }
             )

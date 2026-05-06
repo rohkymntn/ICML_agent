@@ -577,7 +577,12 @@ def build_edit_tasks(
     budgets: str = "1,2,3,5",
     objectives: str = "novelty,fragility_aware,motif_avoidance",
     min_candidates: int = 20,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    split: Optional[str] = None,
 ) -> dict:
+    """Build editing tasks. If ``split`` is given (train/val/test/clinical_test),
+    only datasets in that split contribute tasks; output filename gets a split
+    suffix unless ``out`` was explicitly specified by the caller."""
     import pandas as pd
 
     from phaseagent.editing_tasks import build_editing_tasks
@@ -589,12 +594,24 @@ def build_edit_tasks(
         return [x.strip() for x in text.split(",") if x.strip()]
 
     df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    splits_df = None
+    splits_path = Path(VOLUME_PATH) / splits_csv
+    if splits_path.exists():
+        splits_df = pd.read_csv(splits_path)
+    elif split is not None:
+        raise FileNotFoundError(
+            f"split={split!r} requested but {splits_path} missing; run build_edit_splits first"
+        )
     tasks = build_editing_tasks(
         df,
         budgets=parse_ints(budgets),
         objectives=parse_strs(objectives),
         min_candidates=min_candidates,
+        splits=splits_df,
+        split_filter=split,
     )
+    if split is not None and out == "outputs/editguard/edit_tasks.csv":
+        out = f"outputs/editguard/edit_tasks_{split}.csv"
     out_path = Path(VOLUME_PATH) / out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tasks.to_csv(out_path, index=False)
@@ -645,16 +662,26 @@ def run_edit_baselines(
     seeds: int = 5,
     max_tasks: int = 0,
     max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = None,
 ) -> dict:
     import pandas as pd
 
     from phaseagent.edit_baselines import run_edit_baselines as run_one
     from phaseagent.edit_eval import evaluate_methods
+    from phaseagent.edit_splits import assert_tasks_in_split
     from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
     from phaseagent.editguard_prior import DMSFunctionPrior
 
     df = pd.read_parquet(Path(VOLUME_PATH) / data)
     tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
     if max_tasks > 0:
         tasks = tasks.head(max_tasks)
     prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
@@ -703,26 +730,41 @@ def run_editguard_diffusion(
     data: str = "processed/all_dms.parquet",
     tasks_csv: str = "outputs/editguard/edit_tasks.csv",
     prior_path: str = "outputs/editguard/editguard_prior.pkl",
-    out: str = "outputs/editguard/editguard_diffusion_metrics.csv",
-    selections_out: str = "outputs/editguard/editguard_diffusion_selections.parquet",
+    out: str = "outputs/editguard/dms_pool_guided_metrics.csv",
+    selections_out: str = "outputs/editguard/dms_pool_guided_selections.parquet",
     k: int = 50,
     seeds: int = 5,
     max_tasks: int = 0,
     max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = None,
 ) -> dict:
+    """Run the DMS-pool guided sampler. The output method label is
+    ``dms_pool_guided`` — this is a selection baseline, not a generative model.
+    The Modal function name is kept for backwards compatibility with existing
+    pipelines; ``editguard_diffusion`` is reserved for the real DPLM-backed
+    sampler implemented in Phase 2 of the plan."""
     import pandas as pd
 
     from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.edit_splits import assert_tasks_in_split
     from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
-    from phaseagent.editguard_diffusion import DiffusionSampleConfig, MeasuredPoolEditDiffusion
+    from phaseagent.editguard_diffusion import DMSPoolGuidedSampler, DiffusionSampleConfig
     from phaseagent.editguard_prior import DMSFunctionPrior
 
     df = pd.read_parquet(Path(VOLUME_PATH) / data)
     tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
     if max_tasks > 0:
         tasks = tasks.head(max_tasks)
     prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
-    sampler = MeasuredPoolEditDiffusion(prior)
+    sampler = DMSPoolGuidedSampler(prior)
     metric_rows, selection_rows = [], []
     for task_idx, row in tasks.iterrows():
         task = task_from_row(row)
@@ -743,7 +785,7 @@ def run_editguard_diffusion(
                     "objective": task.objective,
                     "edit_budget": task.edit_budget,
                     "seed": seed,
-                    "method": "editguard_diffusion",
+                    "method": "dms_pool_guided",
                     **evaluate_edit_selection(selected, task),
                 }
             )
@@ -819,7 +861,7 @@ def run_editguard_ablations(
                         "objective": task.objective,
                         "edit_budget": task.edit_budget,
                         "seed": seed,
-                        "method": "editguard_diffusion",
+                        "method": "dms_pool_guided",
                         "ablation": name,
                         **evaluate_edit_selection(selected, task),
                     }
@@ -1232,7 +1274,7 @@ def run_structure_sanity_report(
 @app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
 def make_editguard_figures(
     baseline_results: str = "outputs/editguard/edit_baseline_metrics.csv",
-    diffusion_results: str = "outputs/editguard/editguard_diffusion_metrics.csv",
+    diffusion_results: str = "outputs/editguard/dms_pool_guided_metrics.csv",
     out_dir: str = "outputs/editguard/figures",
 ) -> dict:
     import pandas as pd
@@ -1306,9 +1348,15 @@ def summarize_editguard_outputs(rel_dir: str = "outputs/editguard") -> dict:
     for name in [
         "edit_splits.csv",
         "edit_tasks.csv",
+        "edit_tasks_train.csv",
+        "edit_tasks_val.csv",
+        "edit_tasks_test.csv",
+        "edit_tasks_clinical_test.csv",
         "editguard_prior_metrics.csv",
+        "editguard_prior_calibration.csv",
         "edit_baseline_metrics.csv",
-        "editguard_diffusion_metrics.csv",
+        "dms_pool_guided_metrics.csv",
+        "editguard_dplm_metrics.csv",
         "editguard_ablation_metrics.csv",
         "editguard_ablation_fast_metrics.csv",
         "editguard_ablation_smoke_metrics.csv",

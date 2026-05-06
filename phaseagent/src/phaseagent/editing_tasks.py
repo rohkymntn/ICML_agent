@@ -132,8 +132,29 @@ def build_editing_tasks(
     budgets: Iterable[int] = (1, 2, 3, 5),
     objectives: Iterable[str] = ("novelty", "fragility_aware", "motif_avoidance"),
     min_candidates: int = 20,
+    splits: "pd.DataFrame | None" = None,
+    split_filter: "str | None" = None,
 ) -> pd.DataFrame:
-    """Build an editing-task table from measured DMS assays."""
+    """Build an editing-task table from measured DMS assays.
+
+    If ``splits`` is provided, every output row gets a ``split`` column. If
+    ``split_filter`` is also provided, only datasets assigned to that split
+    contribute rows — used to enforce held-out evaluation discipline.
+    """
+    if split_filter is not None and splits is None:
+        raise ValueError("split_filter requires splits to be provided")
+    if splits is not None:
+        from .edit_splits import VALID_SPLITS, filter_by_split
+
+        if split_filter is not None:
+            df = filter_by_split(df, splits, split_filter)
+        elif "dataset_id" not in df.columns:
+            raise ValueError("df must have a 'dataset_id' column when splits is given")
+        splits_map = dict(zip(splits["dataset_id"].astype(str), splits["split"].astype(str)))
+        if split_filter is not None and split_filter not in VALID_SPLITS:
+            raise ValueError(f"Unknown split_filter {split_filter!r}")
+    else:
+        splits_map = None
     rows = []
     for dataset_id, sub in df.groupby("dataset_id"):
         fragile = infer_fragile_positions(sub)
@@ -151,16 +172,17 @@ def build_editing_tasks(
                 pool = candidate_pool_for_task(df, task)
                 if len(pool) < min_candidates:
                     continue
-                rows.append(
-                    {
-                        "dataset_id": dataset_id,
-                        "objective": objective,
-                        "edit_budget": int(budget),
-                        "protected_positions": ",".join(map(str, protected)),
-                        "forbidden_residues": ",".join(forbidden),
-                        "n_candidates": int(len(pool)),
-                    }
-                )
+                row = {
+                    "dataset_id": dataset_id,
+                    "objective": objective,
+                    "edit_budget": int(budget),
+                    "protected_positions": ",".join(map(str, protected)),
+                    "forbidden_residues": ",".join(forbidden),
+                    "n_candidates": int(len(pool)),
+                }
+                if splits_map is not None:
+                    row["split"] = splits_map.get(str(dataset_id), "unassigned")
+                rows.append(row)
     return pd.DataFrame(rows)
 
 
