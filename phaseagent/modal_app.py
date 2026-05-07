@@ -47,7 +47,22 @@ CPU_PIP = [
     "pyarrow>=14.0",
 ]
 
-GPU_PIP = ["torch==2.4.0", "fair-esm==2.0.0"]
+GPU_PIP = [
+    "torch==2.4.0",
+    "fair-esm==2.0.0",
+    # ESM-IF1 inverse folding deps. fair-esm doesn't pin these in install_requires.
+    # biotite 0.40 is built against numpy 1.x — we must pin numpy<2 for ABI.
+    "numpy<2",
+    "biotite==0.40.0",
+    "torch-geometric==2.4.0",
+    # Phase 2.2 — DPLM 650M loads via standard transformers (it's ESM-2 arch).
+    "transformers==4.39.2",
+    "huggingface_hub>=0.20",
+]
+
+# torch_scatter ships per-CUDA wheels via the PyG index; pip can't resolve it
+# from PyPI alone for torch 2.4.0 + CUDA 12.x.
+PYG_WHEEL_INDEX = "https://data.pyg.org/whl/torch-2.4.0+cu121.html"
 
 cpu_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -58,6 +73,7 @@ cpu_image = (
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(*CPU_PIP, *GPU_PIP)
+    .pip_install("torch-scatter", extra_options=f"-f {PYG_WHEEL_INDEX}")
     .add_local_dir("src/phaseagent", remote_path="/root/phaseagent", copy=True)
 )
 
@@ -101,6 +117,147 @@ def download_proteingym(
     csvs = list(target.rglob("*.csv"))
     print(f"[download] wrote {len(csvs)} CSVs to {target}")
     return {"path": str(target), "n_csvs": len(csvs), "skipped": False}
+
+
+DATASET_TO_UNIPROT: dict[str, str] = {
+    # Hand-curated for the 3 test-split datasets used in Phase 2.3 / 2.2.
+    # Extend as more datasets enter the test split. The canonical ProteinGym
+    # reference table also has these mappings; we keep a small inline copy
+    # to avoid a third archive download for the few datasets we evaluate.
+    "F7YBW8_MESOW_Aakre_2015": "F7YBW8",
+    "GCN4_YEAST_Staller_2018": "P03069",
+    "GFP_AEQVI_Sarkisyan_2016": "P42212",
+    # Train / val datasets — populated for completeness even though the
+    # structure baseline only runs on test.
+    "CAPSD_AAV2S_Sinai_2021": "P03135",
+    "D7PM05_CLYGR_Somermeyer_2022": "D7PM05",
+    "F7YBW8_MESOW_Ding_2023": "F7YBW8",
+    "HIS7_YEAST_Pokusaeva_2019": "P06633",
+    "PHOT_CHLRE_Chen_2023": "P25168",
+    "Q6WV12_9MAXI_Somermeyer_2022": "Q6WV12",
+    "Q8WTC7_9CNID_Somermeyer_2022": "Q8WTC7",
+    "SPG1_STRSG_Wu_2016": "P19909",
+}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def download_alphafold_structures(
+    out_dir: str = "structures",
+    dataset_ids: str = "",
+    overwrite: bool = False,
+) -> dict:
+    """Fetch AlphaFold-2 predicted PDB structures for our DMS datasets.
+
+    Resolves UniProt accession via ``DATASET_TO_UNIPROT``, queries the AFDB
+    prediction API for the latest model version, then downloads the PDB.
+    Caches results on the Modal volume under ``structures/{dataset_id}.pdb``.
+    Datasets without a UniProt mapping (or without an AFDB structure) are
+    reported and skipped — never silently imputed.
+    """
+    import json
+
+    import requests
+
+    target = Path(VOLUME_PATH) / out_dir
+    target.mkdir(parents=True, exist_ok=True)
+    candidates = [d.strip() for d in dataset_ids.split(",") if d.strip()]
+    if not candidates:
+        candidates = list(DATASET_TO_UNIPROT.keys())
+    summary = {}
+    for ds_id in candidates:
+        out_path = target / f"{ds_id}.pdb"
+        if out_path.exists() and not overwrite:
+            summary[ds_id] = {"status": "cached", "path": str(out_path)}
+            continue
+        accession = DATASET_TO_UNIPROT.get(ds_id)
+        if accession is None:
+            summary[ds_id] = {"status": "no_uniprot_mapping"}
+            continue
+        api = f"https://alphafold.ebi.ac.uk/api/prediction/{accession}"
+        try:
+            r = requests.get(api, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            if not data:
+                summary[ds_id] = {"status": "no_afdb_entry", "uniprot": accession}
+                continue
+            entry = data[0]
+            pdb_url = entry["pdbUrl"]
+            seq = entry.get("uniprotSequence", "")
+            pdb_resp = requests.get(pdb_url, timeout=120)
+            pdb_resp.raise_for_status()
+            out_path.write_bytes(pdb_resp.content)
+            summary[ds_id] = {
+                "status": "downloaded",
+                "uniprot": accession,
+                "length": len(seq),
+                "path": str(out_path),
+                "pdb_url": pdb_url,
+            }
+            print(f"[afdb] {ds_id}: {accession} ({len(seq)} aa) → {out_path.name}")
+        except Exception as exc:
+            summary[ds_id] = {"status": f"error:{type(exc).__name__}:{exc}"}
+            print(f"[afdb] {ds_id}: ERROR {exc}")
+    volume.commit()
+    return summary
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 4)
+def download_proteingym_zero_shot(
+    url: str = "https://marks.hms.harvard.edu/proteingym/ProteinGym_v1.3/zero_shot_substitutions_scores.zip",
+    out_dir: str = "raw/proteingym_v1_3_zero_shot",
+    overwrite: bool = False,
+) -> dict:
+    """Pull the 1.9 GB v1.3 zero-shot model-prediction archive (Tranception, EVE, etc.).
+
+    Layout after extraction is roughly
+    ``zero_shot/substitutions/{MODEL_NAME}/{DATASET_ID}.csv``; each CSV has a
+    per-variant predicted score column whose name varies by model.
+    """
+    import io
+    import zipfile
+
+    import requests
+    from tqdm import tqdm
+
+    target = Path(VOLUME_PATH) / out_dir
+    if target.exists() and any(target.rglob("*.csv")) and not overwrite:
+        n = sum(1 for _ in target.rglob("*.csv"))
+        print(f"[zero-shot] {target} already populated with {n} CSVs; skip")
+        return {"path": str(target), "n_csvs": n, "skipped": True}
+    target.mkdir(parents=True, exist_ok=True)
+    print(f"[zero-shot] {url}")
+    with requests.get(url, stream=True, timeout=1800) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length") or 0)
+        buf = io.BytesIO()
+        chunk = 8 * 1024 * 1024
+        with tqdm(total=total, unit="B", unit_scale=True) as pbar:
+            for c in r.iter_content(chunk_size=chunk):
+                if c:
+                    buf.write(c)
+                    pbar.update(len(c))
+        buf.seek(0)
+    print("[zero-shot] extracting…")
+    with zipfile.ZipFile(buf) as z:
+        z.extractall(target)
+    volume.commit()
+    csvs = list(target.rglob("*.csv"))
+    top_dirs = sorted({p.parts[len(target.parts):][0] for p in csvs})[:10]
+    model_dirs: list[str] = []
+    for top in top_dirs:
+        sub = target / top
+        if sub.is_dir():
+            model_dirs.extend(sorted(d.name for d in sub.iterdir() if d.is_dir())[:30])
+    print(f"[zero-shot] wrote {len(csvs)} CSVs across top-level dirs: {top_dirs}")
+    print(f"[zero-shot] sample model dirs: {model_dirs[:10]}")
+    return {
+        "path": str(target),
+        "n_csvs": len(csvs),
+        "skipped": False,
+        "top_dirs": top_dirs,
+        "sample_models": model_dirs[:10],
+    }
 
 
 # ---------- 2. Build processed parquet ----------
@@ -556,18 +713,35 @@ def build_edit_splits(
     data: str = "processed/all_dms.parquet",
     out: str = "outputs/editguard/edit_splits.csv",
     seed: int = 0,
+    train_frac: float = 0.5,
+    val_frac: float = 0.2,
+    clinical_holdout: bool = True,
 ) -> dict:
+    """Build dataset-level train/val/test splits.
+
+    Defaults updated for the post-audit pipeline: ``train_frac=0.5,
+    val_frac=0.2`` lands roughly 50/20/30 instead of the legacy 70/15/15,
+    so the held-out test set has enough datasets for paired Wilcoxon to be
+    informative.
+    """
     import pandas as pd
 
     from phaseagent.edit_splits import make_dataset_splits
 
     df = pd.read_parquet(Path(VOLUME_PATH) / data)
-    splits = make_dataset_splits(df["dataset_id"].unique(), seed=seed)
+    splits = make_dataset_splits(
+        df["dataset_id"].unique(),
+        seed=seed,
+        train_frac=train_frac,
+        val_frac=val_frac,
+        clinical_holdout=clinical_holdout,
+    )
     out_path = Path(VOLUME_PATH) / out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     splits.to_csv(out_path, index=False)
     volume.commit()
-    return {"rows": int(len(splits)), "out": str(out_path)}
+    summary = splits["split"].value_counts().to_dict()
+    return {"rows": int(len(splits)), "split_counts": summary, "out": str(out_path)}
 
 
 @app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=1800)
@@ -800,6 +974,1048 @@ def run_editguard_diffusion(
         pd.concat(selection_rows, ignore_index=True).to_parquet(Path(VOLUME_PATH) / selections_out, index=False)
     volume.commit()
     return {"rows": int(len(metric_rows)), "out": str(out_path)}
+
+
+# ---------- Real ESM-2 masked-marginal baseline (Phase 2.1) ----------
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 4)
+def run_real_esm_baseline(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/esm2_masked_marginal_metrics.csv",
+    selections_out: str = "outputs/editguard/esm2_masked_marginal_selections.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    model_name: str = "esm2_t33_650M_UR50D",
+    esm_batch_size: int = 4,
+    dms_rerank_pool: int = 1000,
+) -> dict:
+    """Real ESM-2 masked-marginal baseline on a measured DMS pool.
+
+    Two methods emitted, both selecting from the same DMS candidate pool that
+    ``run_edit_baselines`` and ``run_editguard_diffusion`` use, so the
+    comparison is apples-to-apples:
+
+    1. ``esm2_masked_marginal``: score every candidate by the mean of
+       per-token ESM-2 masked-marginal log-probabilities on the WT sequence,
+       take top-k.
+    2. ``esm2_masked_marginal_dms_rerank``: take the top
+       ``dms_rerank_pool`` ESM candidates, rerank by the DMS function prior,
+       take top-k. Tests whether ESM's naturalness ranking improves once
+       paired with DMS guidance.
+
+    Always evaluates on the test split unless ``require_split`` is overridden.
+    Defaults to ``esm2_t33_650M_UR50D`` (650M params, A10G is sufficient).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.edit_generators import infer_wildtype_sequence
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.plm import _load_esm, masked_token_log_probs
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+
+    prior_full = Path(VOLUME_PATH) / prior_path
+    prior = DMSFunctionPrior.load(prior_full) if prior_full.exists() else None
+
+    print(f"[esm-baseline] loading {model_name} once for all tasks")
+    model, alphabet = _load_esm(model_name)
+
+    # Cache: per-dataset {token: log_prob} so the same protein's tokens are
+    # only scored once across all tasks/seeds.
+    token_cache: dict[str, dict[str, float]] = {}
+
+    def get_scores_for_pool(ds_id: str, wt: str, pool_df: pd.DataFrame) -> dict[str, float]:
+        """Return token scores; only call ESM on tokens not already cached."""
+        cache = token_cache.setdefault(ds_id, {})
+        wanted = set()
+        for notation in pool_df["mutation_notation"].astype(str):
+            for tok in parse_mutation_notation(notation):
+                wanted.add(tok)
+        missing = sorted(wanted - cache.keys())
+        if missing:
+            scores = masked_token_log_probs(
+                wt, missing, model, alphabet, batch_size=esm_batch_size
+            )
+            cache.update(scores)
+        return cache
+
+    wt_cache: dict[str, str] = {}
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        wt = wt_cache.get(task.dataset_id)
+        if wt is None:
+            wt = infer_wildtype_sequence(df, task.dataset_id)
+            if wt is None:
+                print(f"[esm-baseline] {task.dataset_id}: cannot infer WT, skipping")
+                continue
+            wt_cache[task.dataset_id] = wt
+            print(f"[esm-baseline] {task.dataset_id}: WT length {len(wt)}")
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed).reset_index(drop=True)
+            else:
+                pool_run = pool.reset_index(drop=True)
+
+            cache = get_scores_for_pool(task.dataset_id, wt, pool_run)
+            esm_scores = []
+            for notation in pool_run["mutation_notation"].astype(str):
+                toks = parse_mutation_notation(notation)
+                if not toks or any(t not in cache for t in toks):
+                    esm_scores.append(float("nan"))
+                else:
+                    esm_scores.append(float(np.mean([cache[t] for t in toks])))
+            scored = pool_run.assign(esm_masked_score=esm_scores).dropna(subset=["esm_masked_score"])
+            if len(scored) == 0:
+                continue
+
+            esm_top = scored.nlargest(min(k, len(scored)), "esm_masked_score").copy()
+            esm_top["method"] = "esm2_masked_marginal"
+
+            rerank_n = max(min(dms_rerank_pool, len(scored)), k)
+            esm_pool = scored.nlargest(rerank_n, "esm_masked_score").copy()
+            if prior is not None and len(esm_pool):
+                esm_pool["prior_function_prob"] = prior.predict_proba(esm_pool)
+                dms_top = esm_pool.nlargest(min(k, len(esm_pool)), "prior_function_prob").copy()
+                dms_top["method"] = "esm2_masked_marginal_dms_rerank"
+            else:
+                dms_top = esm_top.copy()
+                dms_top["method"] = "esm2_masked_marginal_dms_rerank"
+
+            for sel in (esm_top, dms_top):
+                method = sel["method"].iloc[0]
+                metrics = evaluate_edit_selection(sel, task)
+                metric_rows.append(
+                    {
+                        "task_idx": int(task_idx),
+                        "dataset_id": task.dataset_id,
+                        "objective": task.objective,
+                        "edit_budget": task.edit_budget,
+                        "seed": seed,
+                        "method": method,
+                        **metrics,
+                    }
+                )
+                tmp = sel.copy()
+                tmp["task_idx"] = int(task_idx)
+                tmp["seed"] = seed
+                selection_rows.append(tmp)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / selections_out, index=False
+        )
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path), "model": model_name}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def run_calibration_on_candidate_pools(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    metrics_out: str = "outputs/editguard/editguard_prior_calibration_pools.csv",
+    bins_out: str = "outputs/editguard/editguard_prior_calibration_pools_bins.csv",
+    figure_out: str = "outputs/editguard/figures/fig_calibration_pools.png",
+    n_bins: int = 15,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+) -> dict:
+    """Compute calibration on the editing **candidate pools** the prior is
+    actually used to score in benchmark tasks.
+
+    More operationally relevant than calibration on the full DMS distribution
+    because the candidate pool is filtered to ``mutation_distance ≤ edit_budget``
+    and respects task constraints — exactly what scoring sees at edit time.
+    """
+    import pandas as pd
+
+    from phaseagent.calibration import (
+        evaluate_calibration_per_dataset,
+        evaluate_calibration_per_split,
+        plot_reliability_diagram,
+    )
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+
+    pool_rows = []
+    seen = set()
+    for _, row in tasks.iterrows():
+        task = task_from_row(row)
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        # Dedupe by (dataset_id, mutation_notation) so a variant that appears
+        # in multiple tasks counts once.
+        for _, r in pool.iterrows():
+            key = (str(r["dataset_id"]), str(r["mutation_notation"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            pool_rows.append(r)
+    pooled = pd.DataFrame(pool_rows)
+    if len(pooled) == 0:
+        raise RuntimeError("no candidate-pool variants assembled across tasks")
+    pooled["pred_p"] = prior.predict_proba(pooled)
+    pooled["split"] = require_split or "all"
+
+    metrics, bin_tables = evaluate_calibration_per_split(
+        pooled, pred_col="pred_p", label_col="viable", n_bins=n_bins
+    )
+    per_ds = evaluate_calibration_per_dataset(
+        pooled, pred_col="pred_p", label_col="viable", n_bins=n_bins
+    )
+
+    metrics_path = Path(VOLUME_PATH) / metrics_out
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_combined = pd.concat([metrics, per_ds.rename(columns={"dataset_id": "split"})], ignore_index=True)
+    metrics_combined.to_csv(metrics_path, index=False)
+
+    bins_long = []
+    for split_name, b in bin_tables.items():
+        if len(b) == 0:
+            continue
+        bb = b.copy()
+        bb["split"] = split_name
+        bins_long.append(bb)
+    bins_path = Path(VOLUME_PATH) / bins_out
+    if bins_long:
+        pd.concat(bins_long, ignore_index=True).to_csv(bins_path, index=False)
+    else:
+        pd.DataFrame().to_csv(bins_path, index=False)
+
+    figure_path = Path(VOLUME_PATH) / figure_out
+    plot_reliability_diagram(
+        bin_tables,
+        figure_path,
+        title=f"DMS function prior — reliability on candidate pools ({require_split})",
+        splits_to_plot=[require_split or "all", "pooled"],
+    )
+    volume.commit()
+
+    print("[calib-pools] metrics:")
+    print(metrics_combined.to_string(index=False))
+    return {
+        "metrics": str(metrics_path),
+        "bins": str(bins_path),
+        "figure": str(figure_path),
+        "pooled_ece": float(metrics.set_index("split").loc["pooled", "ece"]),
+    }
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def run_calibration_eval(
+    data: str = "processed/all_dms.parquet",
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    metrics_out: str = "outputs/editguard/editguard_prior_calibration.csv",
+    per_dataset_out: str = "outputs/editguard/editguard_prior_calibration_per_dataset.csv",
+    bins_out: str = "outputs/editguard/editguard_prior_calibration_bins.csv",
+    figure_out: str = "outputs/editguard/figures/fig_calibration_reliability.png",
+    n_bins: int = 15,
+    sample_per_split: int = 200_000,
+    seed: int = 0,
+) -> dict:
+    """Compute calibration metrics for the trained DMS function prior.
+
+    Predicts on every variant in train/val/test splits (sub-sampled per
+    split for speed; default 200k rows per split is enough for stable ECE),
+    computes ECE / Brier / log-loss per split, per-dataset, and pooled,
+    and renders a reliability diagram. Defends claim C3 from the
+    implementation plan.
+    """
+    import pandas as pd
+
+    from phaseagent.calibration import (
+        evaluate_calibration_per_dataset,
+        evaluate_calibration_per_split,
+        plot_reliability_diagram,
+    )
+    from phaseagent.edit_splits import add_splits
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    splits = pd.read_csv(Path(VOLUME_PATH) / splits_csv)
+    labeled = add_splits(df, splits)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+
+    # Subsample per split for tractable inference (the prior is 130 MB and we
+    # have ~700k rows total). 200k per split gives stable ECE at 15 bins.
+    parts = []
+    for split, sub in labeled.groupby("split"):
+        if sample_per_split > 0 and len(sub) > sample_per_split:
+            sub = sub.sample(sample_per_split, random_state=seed)
+        parts.append(sub)
+    work = pd.concat(parts, ignore_index=True).copy()
+
+    print(f"[calib] predicting on {len(work)} variants across splits "
+          f"{sorted(work['split'].unique())}")
+    work["pred_p"] = prior.predict_proba(work)
+
+    metrics, bin_tables = evaluate_calibration_per_split(
+        work, pred_col="pred_p", label_col="viable", n_bins=n_bins
+    )
+    per_ds = evaluate_calibration_per_dataset(
+        work, pred_col="pred_p", label_col="viable", n_bins=n_bins
+    )
+
+    metrics_path = Path(VOLUME_PATH) / metrics_out
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics.to_csv(metrics_path, index=False)
+
+    per_ds_path = Path(VOLUME_PATH) / per_dataset_out
+    per_ds.to_csv(per_ds_path, index=False)
+
+    bins_long = []
+    for split_name, b in bin_tables.items():
+        if len(b) == 0:
+            continue
+        bb = b.copy()
+        bb["split"] = split_name
+        bins_long.append(bb)
+    bins_path = Path(VOLUME_PATH) / bins_out
+    if bins_long:
+        pd.concat(bins_long, ignore_index=True).to_csv(bins_path, index=False)
+    else:
+        pd.DataFrame().to_csv(bins_path, index=False)
+
+    figure_path = Path(VOLUME_PATH) / figure_out
+    plot_reliability_diagram(bin_tables, figure_path,
+                             title="DMS function prior — reliability (test/val/train/pooled)")
+    volume.commit()
+
+    print("[calib] per-split metrics:")
+    print(metrics.to_string(index=False))
+    return {
+        "metrics": str(metrics_path),
+        "per_dataset": str(per_ds_path),
+        "bins": str(bins_path),
+        "figure": str(figure_path),
+        "test_ece": float(metrics.set_index("split").loc["test", "ece"]) if "test" in set(metrics["split"]) else float("nan"),
+    }
+
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 6)
+def precompute_esm_if_scores(
+    data: str = "processed/all_dms.parquet",
+    structures_dir: str = "structures",
+    out_dir: str = "outputs/editguard/esm_if_scores",
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    max_per_dataset: int = 0,
+    overwrite: bool = False,
+) -> dict:
+    """Precompute ESM-IF1 scores for every unique variant in each dataset's
+    full DMS pool, once per dataset. Caches as
+    ``outputs/editguard/esm_if_scores/{dataset_id}.parquet`` on the Modal volume.
+
+    Per-variant scoring is wrapped in a try/except so one bad sequence
+    cannot kill the whole run. Writes per-dataset progress and commits the
+    volume after each dataset so partial work is recoverable.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.edit_splits import filter_by_split
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.structure_baselines import (
+        _load_esm_if,
+        load_backbone_coords,
+        per_residue_log_probs,
+        score_variant_per_position,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    if require_split:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(f"missing {splits_path}")
+        df = filter_by_split(df, pd.read_csv(splits_path), require_split)
+    out_root = Path(VOLUME_PATH) / out_dir
+    out_root.mkdir(parents=True, exist_ok=True)
+    structures_path = Path(VOLUME_PATH) / structures_dir
+
+    print(f"[esm-if-precompute] loading model")
+    model, alphabet = _load_esm_if()
+
+    summary = {}
+    for ds_id, sub in df.groupby("dataset_id"):
+        ds_out = out_root / f"{ds_id}.parquet"
+        if ds_out.exists() and not overwrite:
+            existing = pd.read_parquet(ds_out)
+            summary[ds_id] = {"status": "cached", "n_scored": int(len(existing))}
+            print(f"[esm-if-precompute] {ds_id}: cached {len(existing)} variants")
+            continue
+        pdb_path = structures_path / f"{ds_id}.pdb"
+        if not pdb_path.exists():
+            summary[ds_id] = {"status": "no_pdb"}
+            print(f"[esm-if-precompute] {ds_id}: no PDB; skipping")
+            continue
+        coords, native_seq = load_backbone_coords(str(pdb_path), chain="A")
+        unique = sub.drop_duplicates(["mutation_notation"]).copy()
+        unique = unique[
+            unique["mutated_sequence"].notna()
+            & (unique["mutated_sequence"].astype(str).str.len() == len(native_seq))
+            & (unique["mutated_sequence"].astype(str).str.contains(r"\*", regex=True) == False)  # noqa: E712
+        ]
+        if max_per_dataset > 0 and len(unique) > max_per_dataset:
+            unique = unique.sample(max_per_dataset, random_state=0)
+        print(f"[esm-if-precompute] {ds_id}: scoring {len(unique)} unique variants "
+              f"(WT length {len(native_seq)})")
+
+        rows = []
+        n = len(unique)
+        for i, (_, row) in enumerate(unique.iterrows()):
+            seq = str(row["mutated_sequence"])
+            try:
+                per_pos = per_residue_log_probs(model, alphabet, coords, seq)
+                toks = parse_mutation_notation(str(row["mutation_notation"]))
+                positions = []
+                for tok in toks:
+                    try:
+                        positions.append(int(tok[1:-1]))
+                    except ValueError:
+                        continue
+                s_pos, s_full = score_variant_per_position(None, per_pos, positions)
+                rows.append(
+                    {
+                        "dataset_id": ds_id,
+                        "mutation_notation": row["mutation_notation"],
+                        "esm_if_score": s_pos,
+                        "esm_if_score_full": s_full,
+                    }
+                )
+            except Exception as exc:
+                rows.append(
+                    {
+                        "dataset_id": ds_id,
+                        "mutation_notation": row["mutation_notation"],
+                        "esm_if_score": float("nan"),
+                        "esm_if_score_full": float("nan"),
+                        "error": f"{type(exc).__name__}:{exc}",
+                    }
+                )
+            if (i + 1) % 200 == 0:
+                print(f"[esm-if-precompute] {ds_id}: {i+1}/{n}")
+        scored = pd.DataFrame(rows)
+        ds_out.parent.mkdir(parents=True, exist_ok=True)
+        scored.to_parquet(ds_out, index=False)
+        n_ok = int(scored["esm_if_score"].notna().sum())
+        summary[ds_id] = {
+            "status": "scored",
+            "n_unique": int(len(unique)),
+            "n_ok": n_ok,
+            "out": str(ds_out),
+        }
+        volume.commit()
+        print(f"[esm-if-precompute] {ds_id}: wrote {n_ok}/{len(unique)} to {ds_out.name}")
+    return summary
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def run_structure_baseline_from_cache(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    scores_dir: str = "outputs/editguard/esm_if_scores",
+    out: str = "outputs/editguard/esm_if_metrics.csv",
+    selections_out: str = "outputs/editguard/esm_if_selections.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    score_col: str = "esm_if_score",
+) -> dict:
+    """Build the structure-conditioned leaderboard rows from precomputed
+    ESM-IF scores. Pure CPU lookup — no GPU needed once
+    ``precompute_esm_if_scores`` has run."""
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+
+    scores_root = Path(VOLUME_PATH) / scores_dir
+    scores_cache: dict[str, pd.DataFrame] = {}
+
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        if task.dataset_id not in scores_cache:
+            sp = scores_root / f"{task.dataset_id}.parquet"
+            if not sp.exists():
+                print(f"[esm-if-cache] no scores for {task.dataset_id}; skipping")
+                scores_cache[task.dataset_id] = None
+                continue
+            scores_cache[task.dataset_id] = pd.read_parquet(sp)
+        scores_df = scores_cache[task.dataset_id]
+        if scores_df is None:
+            continue
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        merged = pool.merge(
+            scores_df[["mutation_notation", "esm_if_score", "esm_if_score_full"]],
+            on="mutation_notation",
+            how="left",
+        )
+        for seed in range(seeds):
+            if max_candidates > 0 and len(merged) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = merged.sample(max_candidates, random_state=pool_seed).reset_index(drop=True)
+            else:
+                pool_run = merged.reset_index(drop=True)
+            scored = pool_run.dropna(subset=[score_col])
+            if len(scored) == 0:
+                continue
+            top = scored.nlargest(min(k, len(scored)), score_col).copy()
+            top["method"] = "esm_if_rerank"
+            metrics = evaluate_edit_selection(top, task)
+            metric_rows.append(
+                {
+                    "task_idx": int(task_idx),
+                    "dataset_id": task.dataset_id,
+                    "objective": task.objective,
+                    "edit_budget": task.edit_budget,
+                    "seed": seed,
+                    "method": "esm_if_rerank",
+                    "score_col": score_col,
+                    **metrics,
+                }
+            )
+            tmp = top.copy()
+            tmp["task_idx"] = int(task_idx)
+            tmp["seed"] = seed
+            selection_rows.append(tmp)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / selections_out, index=False
+        )
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path)}
+
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 4)
+def run_structure_baseline(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    structures_dir: str = "structures",
+    out: str = "outputs/editguard/esm_if_metrics.csv",
+    selections_out: str = "outputs/editguard/esm_if_selections.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    score_col: str = "esm_if_score",
+) -> dict:
+    """ESM-IF1 inverse-folding rerank baseline on the measured DMS pool.
+
+    For each test task, loads the AlphaFold WT backbone (cached in
+    ``structures/{dataset_id}.pdb``), scores every pool variant by mean
+    per-residue log-likelihood under ESM-IF1, and selects the top-k by
+    ``score_col`` (default ``esm_if_score`` = mean over mutated positions
+    only). Outputs ``esm_if_rerank`` as the method label.
+
+    Always evaluates on the test split unless ``require_split`` is overridden.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.structure_baselines import (
+        _load_esm_if,
+        load_backbone_coords,
+        per_residue_log_probs,
+        score_variant_per_position,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+
+    print("[esm-if] loading esm_if1_gvp4_t16_142M_UR50 once for all tasks")
+    model, alphabet = _load_esm_if()
+
+    structures_path = Path(VOLUME_PATH) / structures_dir
+    coords_cache: dict[str, tuple] = {}
+    seq_score_cache: dict[tuple[str, str], np.ndarray] = {}
+
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        ds_id = task.dataset_id
+        if ds_id not in coords_cache:
+            pdb_path = structures_path / f"{ds_id}.pdb"
+            if not pdb_path.exists():
+                print(f"[esm-if] no PDB for {ds_id} at {pdb_path}; skipping")
+                coords_cache[ds_id] = None
+                continue
+            coords_cache[ds_id] = load_backbone_coords(str(pdb_path), chain="A")
+        if coords_cache[ds_id] is None:
+            continue
+        coords, native_seq = coords_cache[ds_id]
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed).reset_index(drop=True)
+            else:
+                pool_run = pool.reset_index(drop=True)
+            pos_scores: list[float] = []
+            full_scores: list[float] = []
+            for _, prow in pool_run.iterrows():
+                seq = str(prow.get("mutated_sequence", ""))
+                if not seq or seq.lower() in {"nan", "none"} or len(seq) != len(native_seq):
+                    pos_scores.append(float("nan"))
+                    full_scores.append(float("nan"))
+                    continue
+                key = (ds_id, seq)
+                if key not in seq_score_cache:
+                    seq_score_cache[key] = per_residue_log_probs(model, alphabet, coords, seq)
+                per_pos = seq_score_cache[key]
+                toks = parse_mutation_notation(str(prow.get("mutation_notation", "")))
+                positions = []
+                for tok in toks:
+                    try:
+                        positions.append(int(tok[1:-1]))
+                    except ValueError:
+                        continue
+                s_pos, s_full = score_variant_per_position(None, per_pos, positions)
+                pos_scores.append(s_pos)
+                full_scores.append(s_full)
+            scored = pool_run.assign(
+                esm_if_score=pos_scores,
+                esm_if_score_full=full_scores,
+            ).dropna(subset=[score_col])
+            if len(scored) == 0:
+                continue
+            top = scored.nlargest(min(k, len(scored)), score_col).copy()
+            top["method"] = "esm_if_rerank"
+            metrics = evaluate_edit_selection(top, task)
+            metric_rows.append(
+                {
+                    "task_idx": int(task_idx),
+                    "dataset_id": ds_id,
+                    "objective": task.objective,
+                    "edit_budget": task.edit_budget,
+                    "seed": seed,
+                    "method": "esm_if_rerank",
+                    "score_col": score_col,
+                    **metrics,
+                }
+            )
+            tmp = top.copy()
+            tmp["task_idx"] = int(task_idx)
+            tmp["seed"] = seed
+            selection_rows.append(tmp)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / selections_out, index=False
+        )
+    volume.commit()
+    return {
+        "rows": int(len(metric_rows)),
+        "out": str(out_path),
+        "n_unique_seqs_scored": len(seq_score_cache),
+    }
+
+
+@app.function(image=gpu_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 4)
+def run_editguard_dplm(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/editguard_dplm_metrics.csv",
+    selections_out: str = "outputs/editguard/editguard_dplm_selections.parquet",
+    proposals_out: str = "outputs/editguard/editguard_dplm_proposals.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    n_mask_patterns: int = 10,
+    samples_per_pattern: int = 20,
+    beta: float = 1.0,
+    temperature: float = 1.0,
+    max_tasks: int = 0,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    model_name: str = "airkingbd/dplm_650m",
+    batch_size: int = 8,
+) -> dict:
+    """DMS-guided DPLM sampler — the headline EditGuard generative method.
+
+    For each test task: sample ``n_mask_patterns`` random K-position masks
+    (respecting protected positions), run DPLM forward passes, decode
+    ``samples_per_pattern`` variants per pattern by stochastic categorical
+    sampling, then rerank with the DMS function prior at weight ``beta``.
+    Outputs ``method = "editguard_diffusion_dplm"``.
+
+    Generated proposals (deduplicated, with DPLM logprobs) are also saved
+    so ``run_editguard_dplm_ablation`` can reuse them at multiple ``beta``
+    values without re-running DPLM.
+    """
+    import pandas as pd
+
+    from phaseagent.dplm_backbone import DPLMConfig, _load_dplm
+    from phaseagent.edit_eval import evaluate_edit_selection, evaluate_generated_selection
+    from phaseagent.edit_generators import infer_wildtype_sequence
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import task_from_row
+    from phaseagent.editguard_dplm import (
+        join_to_dms_labels,
+        propose_with_dplm,
+        rerank_with_classifier_guidance,
+    )
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+
+    print(f"[dplm] loading {model_name}")
+    model, tokenizer = _load_dplm(model_name)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+
+    wt_cache: dict[str, str] = {}
+    metric_rows, selection_rows, proposal_rows = [], [], []
+
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        wt = wt_cache.get(task.dataset_id)
+        if wt is None:
+            wt = infer_wildtype_sequence(df, task.dataset_id)
+            if wt is None:
+                print(f"[dplm] {task.dataset_id}: cannot infer WT, skipping")
+                continue
+            wt_cache[task.dataset_id] = wt
+            print(f"[dplm] {task.dataset_id}: WT length {len(wt)}")
+        for seed in range(seeds):
+            cfg = DPLMConfig(
+                n_mask_patterns=n_mask_patterns,
+                samples_per_pattern=samples_per_pattern,
+                temperature=temperature,
+                seed=int(task_idx) * 1000 + seed,
+                batch_size=batch_size,
+            )
+            proposals = propose_with_dplm(wt, task, model, tokenizer, cfg)
+            if len(proposals) == 0:
+                continue
+            # Persist raw proposals so the ablation can reuse them.
+            tmp = proposals.copy()
+            tmp["task_idx"] = int(task_idx)
+            tmp["seed"] = seed
+            tmp["objective"] = task.objective
+            tmp["edit_budget"] = task.edit_budget
+            proposal_rows.append(tmp)
+
+            top = rerank_with_classifier_guidance(proposals, prior, beta=beta, k=k)
+            top["task_idx"] = int(task_idx)
+            top["seed"] = seed
+            labeled = join_to_dms_labels(top, df)
+            metric_rows.append(
+                {
+                    "task_idx": int(task_idx),
+                    "dataset_id": task.dataset_id,
+                    "objective": task.objective,
+                    "edit_budget": task.edit_budget,
+                    "seed": seed,
+                    "method": "editguard_diffusion_dplm",
+                    "beta": float(beta),
+                    "n_proposals": int(len(proposals)),
+                    **evaluate_generated_selection(labeled, task),
+                }
+            )
+            selection_rows.append(labeled)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / selections_out, index=False
+        )
+    if proposal_rows:
+        pd.concat(proposal_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / proposals_out, index=False
+        )
+    volume.commit()
+    return {
+        "rows": int(len(metric_rows)),
+        "out": str(out_path),
+        "n_proposals_total": int(sum(len(p) for p in proposal_rows)),
+    }
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def run_editguard_dplm_ablation(
+    data: str = "processed/all_dms.parquet",
+    proposals_in: str = "outputs/editguard/editguard_dplm_proposals.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    prior_path: str = "outputs/editguard/editguard_prior.pkl",
+    out: str = "outputs/editguard/editguard_dplm_ablation_metrics.csv",
+    k: int = 50,
+    beta_grid: str = "0,0.5,1.0,2.0",
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+) -> dict:
+    """Reuse cached DPLM proposals from ``run_editguard_dplm`` and rerank at
+    every value of ``beta_grid``. Defends C4 (classifier guidance recovers
+    the gap between DMS-naive and DMS-conditioned generation)."""
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_generated_selection
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import task_from_row
+    from phaseagent.editguard_dplm import join_to_dms_labels, rerank_with_classifier_guidance
+    from phaseagent.editguard_prior import DMSFunctionPrior
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+
+    proposals = pd.read_parquet(Path(VOLUME_PATH) / proposals_in)
+    prior = DMSFunctionPrior.load(Path(VOLUME_PATH) / prior_path)
+    betas = [float(b) for b in beta_grid.split(",") if b.strip()]
+
+    metric_rows = []
+    for (task_idx, seed), group in proposals.groupby(["task_idx", "seed"]):
+        task_row = tasks[tasks.index == task_idx]
+        if len(task_row) == 0:
+            continue
+        task = task_from_row(task_row.iloc[0])
+        for beta in betas:
+            top = rerank_with_classifier_guidance(group, prior, beta=beta, k=k)
+            top["task_idx"] = int(task_idx)
+            top["seed"] = int(seed)
+            labeled = join_to_dms_labels(top, df)
+            metric_rows.append(
+                {
+                    "task_idx": int(task_idx),
+                    "dataset_id": task.dataset_id,
+                    "objective": task.objective,
+                    "edit_budget": task.edit_budget,
+                    "seed": int(seed),
+                    "method": "editguard_diffusion_dplm",
+                    "beta": float(beta),
+                    "n_proposals": int(len(group)),
+                    **evaluate_generated_selection(labeled, task),
+                }
+            )
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path), "betas": betas}
+
+
+@app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600)
+def run_vep_baselines(
+    data: str = "processed/all_dms.parquet",
+    tasks_csv: str = "outputs/editguard/edit_tasks_test.csv",
+    zero_shot_dir: str = "raw/proteingym_v1_3_zero_shot",
+    out: str = "outputs/editguard/vep_metrics.csv",
+    selections_out: str = "outputs/editguard/vep_selections.parquet",
+    k: int = 50,
+    seeds: int = 5,
+    max_tasks: int = 0,
+    max_candidates: int = 10000,
+    splits_csv: str = "outputs/editguard/edit_splits.csv",
+    require_split: Optional[str] = "test",
+    methods: str = "tranception_l_rerank:Tranception_L,eve_ensemble_rerank:EVE_ensemble",
+) -> dict:
+    """Pre-computed VEP rerank baselines using ProteinGym v1.3 zero-shot scores.
+
+    Joins the candidate pool to the per-assay zero-shot CSV by mutation
+    notation and ranks by each VEP model's score. ``methods`` is a comma list
+    of ``label:column`` pairs; defaults to Tranception_L (with retrieval) and
+    EVE_ensemble — the two headline VEP picks per the implementation plan.
+
+    Always evaluates on the test split unless ``require_split`` is overridden.
+    Coverage (fraction of pool variants with a VEP score) is reported per
+    task in case the zero-shot CSV is missing rows.
+    """
+    import pandas as pd
+
+    from phaseagent.edit_eval import evaluate_edit_selection
+    from phaseagent.edit_splits import assert_tasks_in_split
+    from phaseagent.editing_tasks import candidate_pool_for_task, task_from_row
+    from phaseagent.vep_baselines import (
+        load_zero_shot_for_dataset,
+        rerank_by_vep,
+        vep_coverage,
+    )
+
+    df = pd.read_parquet(Path(VOLUME_PATH) / data)
+    tasks = pd.read_csv(Path(VOLUME_PATH) / tasks_csv)
+    if require_split is not None:
+        splits_path = Path(VOLUME_PATH) / splits_csv
+        if not splits_path.exists():
+            raise FileNotFoundError(
+                f"require_split={require_split!r} but {splits_path} missing"
+            )
+        assert_tasks_in_split(tasks, pd.read_csv(splits_path), require_split)
+    if max_tasks > 0:
+        tasks = tasks.head(max_tasks)
+
+    pairs = []
+    for entry in methods.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        label, _, column = entry.partition(":")
+        if not column:
+            raise ValueError(f"Bad method spec {entry!r}; expected label:column")
+        pairs.append((label.strip(), column.strip()))
+    if not pairs:
+        raise ValueError("methods must contain at least one label:column pair")
+
+    zs_dir = Path(VOLUME_PATH) / zero_shot_dir
+    zs_cache: dict[str, pd.DataFrame | None] = {}
+
+    metric_rows, selection_rows = [], []
+    for task_idx, row in tasks.iterrows():
+        task = task_from_row(row)
+        if task.dataset_id not in zs_cache:
+            zs_cache[task.dataset_id] = load_zero_shot_for_dataset(zs_dir, task.dataset_id)
+        zs_df = zs_cache[task.dataset_id]
+        if zs_df is None:
+            print(f"[vep] no zero-shot CSV for {task.dataset_id}; skipping")
+            continue
+        pool = candidate_pool_for_task(df, task)
+        if len(pool) == 0:
+            continue
+        for seed in range(seeds):
+            if max_candidates > 0 and len(pool) > max_candidates:
+                pool_seed = int(task_idx) * 1000 + seed
+                pool_run = pool.sample(max_candidates, random_state=pool_seed).reset_index(drop=True)
+            else:
+                pool_run = pool.reset_index(drop=True)
+            for label, column in pairs:
+                if column not in zs_df.columns:
+                    print(f"[vep] {column} missing from {task.dataset_id}; skipping")
+                    continue
+                cov = vep_coverage(pool_run, zs_df, column)
+                sel = rerank_by_vep(pool_run, zs_df, label, column, k=k, higher_is_better=True)
+                if len(sel) == 0:
+                    continue
+                metrics = evaluate_edit_selection(sel, task)
+                metric_rows.append(
+                    {
+                        "task_idx": int(task_idx),
+                        "dataset_id": task.dataset_id,
+                        "objective": task.objective,
+                        "edit_budget": task.edit_budget,
+                        "seed": seed,
+                        "method": label,
+                        "vep_column": column,
+                        "vep_coverage": cov,
+                        **metrics,
+                    }
+                )
+                tmp = sel.copy()
+                tmp["task_idx"] = int(task_idx)
+                tmp["seed"] = seed
+                selection_rows.append(tmp)
+
+    out_path = Path(VOLUME_PATH) / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(metric_rows).to_csv(out_path, index=False)
+    if selection_rows:
+        pd.concat(selection_rows, ignore_index=True).to_parquet(
+            Path(VOLUME_PATH) / selections_out, index=False
+        )
+    volume.commit()
+    return {"rows": int(len(metric_rows)), "out": str(out_path), "methods": [p[0] for p in pairs]}
 
 
 @app.function(image=cpu_image, volumes={VOLUME_PATH: volume}, timeout=3600 * 2)

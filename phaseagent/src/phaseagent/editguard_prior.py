@@ -124,7 +124,14 @@ def featurize_variants(
     nota = df["mutation_notation"].astype(str) if "mutation_notation" in df.columns else pd.Series([""] * n)
     ds_ids = df["dataset_id"].astype(str) if "dataset_id" in df.columns else pd.Series([""] * n)
     if "wildtype_sequence" in df.columns:
-        seq_lens = df["wildtype_sequence"].astype(str).str.len().clip(lower=1)
+        seq_lens = (
+            df["wildtype_sequence"]
+            .fillna("")
+            .astype(str)
+            .replace({"nan": "", "None": ""})
+            .str.len()
+            .replace(0, 1)
+        )
     else:
         seq_lens = pd.Series([1] * n, index=df.index)
 
@@ -160,7 +167,11 @@ def featurize_variants(
             if v is not None and np.isfinite(v):
                 pos_mean_vals.append(v)
         d = max(len(toks), 1)
-        seq_len = max(int(seq_lens.iloc[i]) or 1, 1)
+        seq_raw = seq_lens.iloc[i]
+        try:
+            seq_len = max(int(seq_raw), 1)
+        except (TypeError, ValueError):
+            seq_len = 1
         X[i, 3:23] = wt_counts / d
         X[i, 23:43] = mut_counts / d
         if positions:
