@@ -21,6 +21,21 @@ loaded: `natbib` (line 97 of `icml2025.sty`) provides `\citet`, and `cleveref` (
 `.tex`) provides `\cref`. So the patch still applies cleanly; re-run this currency check if the
 paper is edited again before the artifact lands.
 
+**DRESS-REHEARSED end-to-end iter46 (both branches proven, then reverted).** Prior iterations
+verified this patch piece-by-piece (key names, anchor lines, guard fail-safety); iter46 ran the
+WHOLE harvest against two synthetic `gen_design.json` artifacts and reverted:
+- **WIN artifact** (gen above all baselines, under the ceiling): Step 1 + Steps 2-3 applied →
+  `pytest -q` **124 passed / 4 skipped** (both gen guards activate and pass), `tectonic` **exit 0,
+  9 pp, 0 overfull, 0 undefined refs/cites, 0 `??`**, body (Conclusion) still ends on **page 8**
+  (the new §results-gen lands on p. 7, References after), self-contradiction grep **empty**.
+- **LOSS artifact** (gen below the unconditioned DPLM library): Step 1B + Steps 2-3 applied →
+  `pytest -q` **123 passed / 5 skipped** (structural guard passes, `test_gen_design_reward_guidance_outcome`
+  SKIPS with the offending numbers in its reason — tree green, no manual guard edit needed),
+  `tectonic` **exit 0, 9 pp, 0 overfull/undefined/`??`**, grep **empty**.
+So both outcome branches are confirmed to apply cleanly, compile, fit the 8-page body budget, and
+keep the tree green. The only defect found was the Step-5 `tectonic --outdir` gotcha (now fixed:
+`mkdir -p` first). The harvest is now a fully mechanical paste-and-fill with no remaining latent risk.
+
 ## Step 0 — pull + commit the artifact, run the guard
 ```
 modal volume get phaseagent-data outputs/epistasis/gen_design.json outputs/epistasis/
@@ -186,9 +201,10 @@ run ap-fcAdDhVRfLn1J29tdZPVyD, 3 epochs, H100). Guarded by `tests/test_gen_desig
 
 ## Step 5 — verify + final self-contradiction grep
 ```
-PYTHONPATH=src python -m pytest -q            # structural guard now passes (123 passed); the directional
+PYTHONPATH=src python -m pytest -q            # structural guard now passes; the directional
                                               # guard passes if the claim held (124 passed/4 skipped) or
                                               # skips with its reason if not (123 passed/5 skipped) -- green either way
+mkdir -p _build_harvest                       # REQUIRED: tectonic errors "output directory does not exist" otherwise
 tectonic -X compile paper/epistasis_icml.tex --outdir _build_harvest   # 0 undefined refs/cites, 0 overfull, 0 ??
 grep -niE "do not benchmark|required only if a generative|we do not make a generative" paper/epistasis_icml.tex
 # ^ MUST return nothing. If it does, Steps 2-3 are incomplete.
