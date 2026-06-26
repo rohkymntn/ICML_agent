@@ -1,0 +1,11 @@
+{
+  "n_proteins": 149,
+  "total_double_mutants": 131062,
+  "median_r2_additive": -0.9117856629393899,
+  "median_r2_global": 0.7210276294585942,
+  "median_spec_std_kcal": 0.4215575512110799,
+  "median_spec_var_share": 0.2789723705414057,
+  "frac_proteins_additive_r2_negative": 0.7248322147651006,
+  "frac_proteins_spec_std_gt_0p3": 0.8523489932885906,
+  "frac_proteins_spec_var_share_gt_0p1": 0.9798657718120806
+}

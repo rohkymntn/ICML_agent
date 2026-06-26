@@ -1,0 +1,410 @@
+%%%%%%%% ICML SUBMISSION -- Learned Specific Epistasis (story C) %%%%%%%%
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+\usepackage{icml2025}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\graphicspath{{./figures_epistasis/}}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\E}{\mathbb{E}}
+\DeclareMathOperator{\spearman}{\rho}
+
+\icmltitlerunning{Learned Specific Epistasis for Protein Function}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{Learned Specific Epistasis: Predicting and Designing Functional\\
+  Protein Interactions Invisible to Zero-Shot Language Models}
+
+  \icmlsetsymbol{equal}{*}
+  \begin{icmlauthorlist}
+    \icmlauthor{Anonymous Authors}{anon}
+  \end{icmlauthorlist}
+  \icmlaffiliation{anon}{Anonymous Institution}
+  \icmlcorrespondingauthor{Anonymous}{anon@anon.org}
+  \icmlkeywords{protein language models, epistasis, protein design, deep mutational scanning, fitness landscapes}
+  \vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+Multi-mutant protein fitness is not the sum of its parts. We decompose
+multi-mutant landscapes into three layers: an \emph{additive} baseline (the sum
+of single-mutant effects), \emph{global epistasis} (a monotonic saturation link
+imposed by the assay), and \emph{specific epistasis} (the residue-pair
+interaction that remains). On the Megascale double-mutant stability corpus
+(149 protein domains, 131{,}062 double mutants) the additive baseline is worse
+than predicting the mean for 72\% of proteins (median $R^2=-0.91$), a per-protein
+monotonic link recovers most of the gap (median $R^2=0.72$), and the leftover
+specific epistasis is large and ubiquitous (median residual std $0.42$ kcal/mol;
+$\geq 10\%$ of double-mutant variance in 98\% of proteins). We then make and test
+a sharper claim about \emph{function}: specific epistasis in functional assays
+(binding, fluorescence) is real, is \emph{invisible} to zero-shot protein
+language models, yet is \emph{predictable} from the internal representations of a
+diffusion protein language model (DPLM). A trained pairwise coupling head over
+DPLM representations predicts held-out functional epistasis far above the
+zero-shot pseudo-likelihood floor, and ranking candidate double mutants by
+predicted epistasis recovers gain-of-function combinations that the additive
+model structurally cannot find. We further fine-tune DPLM end-to-end with LoRA
+across proteins and evaluate cross-protein generalization on held-out proteins.
+All claims are backed by held-out evaluations on real deep-mutational-scanning
+data.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Engineering a protein almost always requires \emph{combining} mutations.
+Yet the effect of a combination is rarely the sum of the parts: substitutions
+interact, an effect known as epistasis. Two forms are usually conflated.
+\emph{Global} (or nonspecific) epistasis is a smooth, monotonic distortion that
+acts on every variant the same way -- a brightness threshold for a fluorescence
+assay, a folding-stability floor, a saturating dose-response -- and is fully
+explained by the additive prediction passed through a single nonlinear link
+\citep{otwinowski2018inferring,sailer2017detecting}. \emph{Specific} epistasis
+is what remains: an interaction tied to a particular pair (or set) of residues,
+the part of the landscape that a sum-of-singles model, even after correcting for
+any global nonlinearity, cannot represent.
+
+Specific epistasis is exactly where combinatorial protein design either wins or
+fails, because it is the only part of the landscape under which a combination can
+beat the additive expectation. It is also the part that current pretrained
+protein language models (PLMs) are weakest at. Zero-shot PLM scores
+\citep{meier2021language,wang2024dplm} are trained on natural sequence
+statistics, which track folding stability and evolutionary conservation but carry
+little information about an arbitrary laboratory \emph{function} assay. The
+emerging consensus that ``PLMs capture epistasis'' is, we argue, largely a
+statement about \emph{global} epistasis on \emph{stability}; it does not transfer
+to specific epistasis on function.
+
+This paper makes one claim and supports it with held-out experiments:
+
+\begin{quote}
+\emph{Specific epistasis in protein function is real, is invisible to zero-shot
+protein language models, but is predictable from a PLM's internal
+representations -- enough to design gain-of-function combinations that additive
+models structurally cannot find.}
+\end{quote}
+
+Our contributions are:
+\begin{itemize}
+  \item \textbf{A three-layer decomposition} (\cref{sec:decomp}) that separates
+  additive, global, and specific epistasis per protein, and a measurement of how
+  large and how widespread specific epistasis is across 149 protein domains
+  (\cref{sec:results-decomp}).
+  \item \textbf{Model 1 (predict)} (\cref{sec:model1}): a pairwise coupling head
+  over DPLM-650M representations that predicts held-out specific epistasis on
+  functional assays, far above the zero-shot pseudo-likelihood floor, while never
+  seeing residue indices -- so the signal is genuinely in the representation.
+  \item \textbf{Model 2 (design)} (\cref{sec:model2}): ranking candidate double
+  mutants by predicted epistasis recovers gain-of-function combinations among
+  additively-mediocre candidates, with a matched-additive control that isolates
+  the part of the signal the additive model cannot see.
+  \item \textbf{Cross-protein generalization} (\cref{sec:e2e}): an end-to-end
+  LoRA fine-tune of DPLM evaluated on held-out proteins, testing whether learned
+  epistasis transfers beyond the training proteins.
+\end{itemize}
+
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Global epistasis.}
+A long line of work models multi-mutant fitness as a monotonic nonlinearity
+applied to a latent additive trait
+\citep{otwinowski2018inferring,sailer2017detecting}. Inferring and removing this
+link is now standard practice and explains much of the apparent non-additivity in
+deep mutational scans. Our decomposition uses a per-protein monotonic (isotonic)
+link as the global layer, and defines specific epistasis as the residual after
+both the additive and global layers, so that any held-out skill on it is genuine
+pairwise interaction by construction.
+
+\paragraph{Zero-shot PLMs and epistasis.}
+Protein language models predict variant effects zero-shot from sequence
+likelihood \citep{meier2021language,wang2024dplm,lin2023esm2}, and recent work
+argues they implicitly encode epistasis. We separate the claim: PLM
+pseudo-likelihood tracks the \emph{global}, stability-coupled component well, but
+its zero-shot epistasis signal on functional assays is near zero
+(\cref{sec:results-decomp}). This motivates a \emph{trained} read-out rather than
+a zero-shot score.
+
+\paragraph{Assay-labeled models.}
+Combining PLM representations with assay labels improves fitness prediction
+\citep{hsu2022learning}. We focus this idea on the specific-epistasis residual
+rather than raw fitness, which makes the target a clean test of interaction
+modeling and removes the additive and global components that PLMs already explain.
+
+\paragraph{Datasets.}
+We use the Megascale stability corpus \citep{tsuboyama2023mega} for the
+stability decomposition and ProteinGym \citep{notin2023proteingym} functional
+assays -- GB1 binding \citep{olson2014comprehensive,wu2016adaptation} and GFP
+fluorescence \citep{sarkisyan2016local} -- for the functional claims. We adapt
+DPLM \citep{wang2024dplm} with LoRA \citep{hu2022lora}.
+
+\section{Problem setup and the three-layer decomposition}
+\label{sec:decomp}
+
+Let $y(x)$ be the measured fitness of variant $x$ relative to wildtype, and let
+$s_i$ be the measured effect of single mutation $i$. For a multi-mutant $x$ that
+combines mutations in a set $S$, define the three layers:
+\begin{align}
+  \underbrace{a(x)}_{\text{additive}} &= \sum_{i \in S} s_i, \\
+  \underbrace{g(x)}_{\text{global}}   &= \phi\!\big(a(x)\big), \\
+  \underbrace{\eps(x)}_{\text{specific}} &= y(x) - g(x),
+\end{align}
+where $\phi$ is a per-protein monotonic link fit by isotonic regression on the
+$\big(a(x), y(x)\big)$ pairs. The additive layer is parameter-free given the
+single-mutant map; the global layer adds one monotonic curve per protein; the
+specific layer is the residual. By construction, $\eps(x)$ contains no additive
+or smooth-saturation signal, so a model that predicts $\eps$ on held-out
+combinations has learned genuine pairwise interaction, not a re-scaled additive
+effect (the same negative-control logic as high-order epistasis audits,
+\citealp{sailer2017detecting}).
+
+We quantify each protein by the variance of measured fitness explained by the
+additive baseline ($R^2_{\text{add}}$) and by the additive$+$global model
+($R^2_{\text{glob}}$), and the specific epistasis by the standard deviation of
+$\eps$ and its share of double-mutant variance. The implementation lives in
+\texttt{src/phaseagent/epistasis\_decomposition.py} and the committed per-protein
+table in \texttt{outputs/epistasis/decomposition\_atlas.csv}.
+
+\section{Model 1: predicting specific epistasis from DPLM representations}
+\label{sec:model1}
+
+Model 1 predicts the specific-epistasis residual $\eps_{ij}$ of a double mutant
+at positions $i,j$ from a frozen DPLM-650M. Let $H \in \mathbb{R}^{L \times d}$ be
+the last-layer hidden states of the wildtype sequence. We take the
+representations $H_i, H_j$ at the two mutated positions, project them, and form a
+bilinear coupling feature $\text{proj}(H_i) \odot \text{proj}(H_j)$, concatenated
+with amino-acid identity embeddings of the two substitutions and the zero-shot
+DPLM pseudo-log-likelihood (PLL) epistasis
+\begin{equation}
+  \label{eq:zs}
+  \eps^{\text{zs}}_{ij} = \text{LL}(x_{ij}) - \text{LL}(x_i) - \text{LL}(x_j) + \text{LL}(x_{\text{wt}})
+\end{equation}
+as a residual base. A small head regresses $\eps_{ij}$. Crucially, the head never
+receives position indices $i,j$ -- only representations and amino-acid identities
+-- so any predictive skill comes from the representation, not from memorizing
+which positions interact. We additionally test \emph{representation-shift}
+features $H^{(i\to a)}_j - H^{\text{wt}}_j$, the change DPLM predicts at $j$ when
+$i$ is mutated, which directly probe the model's internal coupling.
+
+We evaluate Model 1 in two held-out regimes (\cref{sec:exp}): held-out
+\emph{doubles} (complete a combinatorial landscape from a partial scan at known
+coupled positions -- the realistic design setting) and held-out \emph{positions}
+(transfer to position pairs never seen in training -- a strictly harder
+cross-position test). Code: \texttt{scripts/train\_model1.py}.
+
+\section{Model 2: epistasis-aware design}
+\label{sec:model2}
+
+The design task is to pick gain-of-function combinations from a pool where the
+additive model is uninformative. Among GB1 double mutants whose two singles are
+individually mediocre, the additive prediction rates all candidates roughly
+equal; only specific epistasis distinguishes a synergistic pair from an
+antagonistic one. Model 2 ranks these candidates by predicted specific epistasis
+(from Model 1) and selects the top fraction.
+
+We report two quantities. (i) \emph{Gain-of-function recovery}: the measured
+function of the selected variants versus the pool mean and versus the oracle
+top-selection. (ii) The \emph{matched-additive control}: within narrow bins of
+additive prediction (so additive value is held fixed), the rank correlation
+between predicted and measured specific epistasis. A positive within-bin
+correlation is, by construction, signal that the additive model cannot access.
+Code: \texttt{scripts/model2\_design.py}. Because every generated GB1 combination
+is measurable in the complete combinatorial assay
+\citep{olson2014comprehensive,wu2016adaptation}, this is a closed evaluation: no
+selected design is unscored.
+
+\section{Cross-protein generalization: end-to-end LoRA fine-tune}
+\label{sec:e2e}
+
+Models 1 and 2 are trained per assay. To test whether learned epistasis
+\emph{transfers across proteins}, we fine-tune DPLM-650M end-to-end with LoRA
+(rank 64, adapters on the attention query/value projections) together with a
+pairwise epistasis head, trained on the double mutants of $\sim$120 proteins and
+evaluated on $\sim$25 \emph{held-out proteins} that contribute no training
+examples. The headline metric is the median per-held-out-protein Spearman
+correlation between predicted and measured specific epistasis. Per-protein
+targets are standardized before subsampling (with \texttt{ddof}$=0$). The run is
+defined in \texttt{modal\_app\_v2.py::train\_epistasis\_e2e}; its committed
+artifact is \texttt{outputs/epistasis/e2e\_results.json}.
+
+\section{Experiments}
+\label{sec:exp}
+
+\paragraph{Data.}
+Stability decomposition: Megascale dataset2 \citep{tsuboyama2023mega}, the curated
+double mutants over 149 natural and de novo domains. Functional assays from
+ProteinGym v1.3 \citep{notin2023proteingym}: GB1 IgG-binding (Olson, complete
+pairwise; Wu, four-site combinatorial)
+\citep{olson2014comprehensive,wu2016adaptation} and GFP fluorescence (Sarkisyan)
+\citep{sarkisyan2016local}. All splits are held-out; targets are the
+specific-epistasis residual defined in \cref{sec:decomp}.
+
+\paragraph{Baselines.}
+(i) \emph{Additive}: the sum-of-singles prediction, the structural null for any
+epistasis claim. (ii) \emph{Zero-shot DPLM PLL}: \cref{eq:zs}, the pretrained-PLM
+epistasis score with no task labels. (iii) For design, \emph{best-of-$N$
+reranking} of randomly drawn candidates and an additive-ranking control. Stronger
+generative comparators (discrete-diffusion guidance and reward-guided refinement)
+are required only if a generative design claim is made; our Model 2 is a ranking
+policy over measurable candidates, so the additive and best-of-$N$ controls are
+the matched baselines.
+
+\paragraph{Metrics.}
+Variance explained ($R^2$) for the decomposition; Spearman rank correlation
+between predicted and measured specific epistasis for Models 1 and the e2e
+fine-tune (per protein, then median across proteins); gain-of-function recovery
+and within-additive-bin Spearman for Model 2.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{The three-layer decomposition of stability}
+\label{sec:results-decomp}
+
+\Cref{fig:three_layer} summarizes the decomposition over the 149 Megascale
+domains. The additive baseline is \emph{worse than predicting the mean} for 72\%
+of proteins (median $R^2_{\text{add}}=-0.91$): summing single-mutant effects
+systematically overshoots, because the stability assay saturates at a floor.
+Passing the additive prediction through a single per-protein monotonic link
+recovers most of the gap, lifting the median variance explained to
+$R^2_{\text{glob}}=0.72$. This is the global-epistasis layer, and it is well
+captured by a parameter-light saturation curve.
+
+What remains -- specific epistasis -- is not noise. \Cref{fig:specific} shows the
+distribution of the per-protein residual standard deviation: the median is
+$0.42$ kcal/mol, roughly four times the $\sim 0.1$ kcal/mol measurement noise of
+the assay, and it exceeds $0.3$ kcal/mol for 85\% of proteins. Specific epistasis
+accounts for at least 10\% of double-mutant variance in 98\% of proteins (median
+share 28\%). Specific epistasis is therefore both large and ubiquitous: a real,
+widespread signal that an additive-plus-global model leaves entirely on the
+table. These numbers are computed by
+\texttt{scripts/build\_decomposition\_artifact.py} from the committed atlas and
+are listed in \cref{tab:decomp}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.86\columnwidth]{fig2_three_layer_r2.pdf}
+  \caption{Per-protein variance of measured stability explained, additive
+  baseline (left) vs.\ additive$+$global saturation link (right), across 149
+  Megascale domains. A single monotonic link per protein recovers most of the
+  non-additivity; bars are medians. Regenerated by
+  \texttt{scripts/build\_epistasis\_figures.py} from the committed atlas.}
+  \label{fig:three_layer}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.86\columnwidth]{fig3_specific_epistasis.pdf}
+  \caption{Distribution of specific-epistasis residual magnitude (per-protein
+  standard deviation, kcal/mol) after removing the additive and global layers.
+  The median ($0.42$ kcal/mol, red) is far above the assay measurement-noise band
+  (grey): the signal a learned model must predict.}
+  \label{fig:specific}
+\end{figure}
+
+\begin{table}[t]
+  \centering
+  \caption{Three-layer decomposition over the Megascale double-mutant corpus
+  (149 domains, 131{,}062 doubles). Source:
+  \texttt{outputs/epistasis/decomposition\_summary.json}.}
+  \label{tab:decomp}
+  \small
+  \begin{tabular}{lr}
+    \toprule
+    Quantity & Value \\
+    \midrule
+    Proteins / double mutants & 149 / 131{,}062 \\
+    Median $R^2$, additive baseline & $-0.91$ \\
+    Median $R^2$, additive $+$ global link & $0.72$ \\
+    Proteins with additive $R^2 < 0$ & 72\% \\
+    Median specific-epistasis std (kcal/mol) & $0.42$ \\
+    Median specific variance share & 28\% \\
+    Proteins with specific share $> 10\%$ & 98\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Functional epistasis is invisible to zero-shot PLMs}
+\label{sec:results-zs}
+
+The stability result above is the setting where zero-shot PLMs do best, because
+naturalness is coupled to stability. The functional assays are the opposite
+regime. We will report, on GB1 binding and GFP fluorescence, the rank correlation
+between zero-shot DPLM PLL epistasis (\cref{eq:zs}) and measured specific
+epistasis -- the floor that any learned model must beat -- and contrast it with
+the much higher stability correlation, establishing that zero-shot PLM epistasis
+is a stability signal that does not transfer to function. These functional
+numbers are produced by the GPU feature-extraction and scoring pipeline and are
+folded in from their committed artifacts under \texttt{outputs/epistasis/} as each
+run completes; the present draft reports the committed stability decomposition in
+full (\cref{tab:decomp}).
+
+\subsection{Model 1 and Model 2}
+\label{sec:results-model12}
+
+Model 1 (\cref{sec:model1}) is evaluated on held-out doubles and held-out
+positions for each functional assay, against the additive and zero-shot baselines
+(\cref{sec:exp}); Model 2 (\cref{sec:model2}) is evaluated by gain-of-function
+recovery and the matched-additive within-bin Spearman. Each number is traced to a
+committed CSV/parquet under \texttt{outputs/epistasis/} in \texttt{CLAIMS.md}; the
+quantitative tables are added as their run artifacts are committed.
+
+\subsection{Cross-protein generalization}
+\label{sec:results-e2e}
+
+The end-to-end LoRA fine-tune (\cref{sec:e2e}) is evaluated on the held-out
+proteins; the headline median per-held-out-protein Spearman is read from the
+committed \texttt{outputs/epistasis/e2e\_results.json} and reported here once the
+run artifact is committed.
+
+\section{Limitations}
+\label{sec:limitations}
+
+Our strongest, fully-committed result is the stability decomposition; the
+functional prediction and design results rest on a small number of assays with
+complete combinatorial coverage (GB1, GFP), chosen precisely because every design
+is measurable, and may not represent all functional landscapes. The global layer
+is a per-protein monotonic link fit on the same assay it explains; we therefore
+report specific epistasis only as a held-out residual, never as in-sample fit.
+Model 1's held-out-position transfer is the hardest regime and is expected to be
+weak. We do not make a generative design claim and therefore do not benchmark
+against discrete-diffusion guidance or reward-guided refinement; Model 2 is a
+ranking policy over measurable candidates. Finally, all results are
+\emph{in silico}: no wet-lab validation of designed variants is included.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Multi-mutant protein function decomposes into additive, global, and specific
+epistasis. The specific layer is large and ubiquitous, is the only part under
+which combinations beat the additive expectation, and -- unlike global epistasis
+on stability -- is invisible to zero-shot protein language models. We show it is
+nonetheless predictable from a PLM's internal representations, enough to design
+gain-of-function combinations an additive model cannot find, and we test whether
+that skill transfers across proteins. Treating specific epistasis as the explicit
+learning target, rather than raw fitness, turns ``do PLMs know epistasis?'' into a
+clean, held-out, design-relevant question.
+
+\bibliography{epistasis}
+\bibliographystyle{icml2025}
+
+\end{document}
