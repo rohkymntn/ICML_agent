@@ -215,7 +215,8 @@ DPLM pseudo-log-likelihood (PLL) epistasis
   \label{eq:zs}
   \eps^{\text{zs}}_{ij} = \text{LL}(x_{ij}) - \text{LL}(x_i) - \text{LL}(x_j) + \text{LL}(x_{\text{wt}})
 \end{equation}
-as a residual base. A small head regresses $\eps_{ij}$. Crucially, the head never
+as a residual base, where $\text{LL}(x)$ is DPLM's sequence pseudo-log-likelihood
+(the residue log-probabilities summed over the sequence). A small head regresses $\eps_{ij}$. Crucially, the head never
 receives position indices $i,j$ -- only representations and amino-acid identities
 -- so any predictive skill comes from the representation, not from memorizing
 which positions interact. We additionally test \emph{representation-shift}
@@ -294,6 +295,24 @@ Variance explained ($R^2$) for the decomposition; Spearman rank correlation
 between predicted and measured specific epistasis for Models 1 and the e2e
 fine-tune (per protein, then median across proteins); gain-of-function recovery
 and within-additive-bin Spearman for Model 2.
+
+\paragraph{Implementation details.}
+Model 1's coupling head projects each mutated-position DPLM-650M hidden state
+($d=1280$) to $128$ dimensions, forms the bilinear product
+$\text{proj}(H_i)\odot\text{proj}(H_j)$, and concatenates $16$-dimensional
+embeddings of the four amino-acid identities (wild-type and mutant at both sites)
+with the $z$-scored zero-shot PLL feature; a LayerNorm followed by a
+two-hidden-layer MLP ($256$ then $128$ units, GELU, dropout $0.3$) regresses the
+specific-epistasis residual, with a learnable scalar gain on the PLL term as a
+residual base. The held-out-position variant additionally consumes the
+representation-shift features (\cref{sec:model1}). We optimize with AdamW
+(learning rate $2\times10^{-3}$, weight decay $10^{-4}$) for $200$ epochs at batch
+size $1024$ under a Huber (smooth-$L_1$) loss on per-fold-standardized targets.
+The held-out-doubles split is $5$-fold shuffled cross-validation; the
+held-out-position split is $5$-fold grouped cross-validation keyed on residue
+position, so no test pair's positions appear in training. All features are
+$z$-scored per dimension, and the head never receives position indices. Full
+configuration: \texttt{scripts/train\_model1.py}.
 
 \section{Results}
 \label{sec:results}
