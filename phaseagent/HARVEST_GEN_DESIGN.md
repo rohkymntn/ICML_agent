@@ -12,6 +12,15 @@ The 11 keys are: `assay, positions, epochs, generated_lib_mean_function,
 generated_NOVEL_lib_mean_function, n_novel_generated, coverage, unconditioned_DPLM_mean,
 random_lib_mean, top_library_ceiling, library_mean_overall`.
 
+**Patch currency — re-verified iter44 against the live paper** (the paper was edited
+after this patch was written, e.g. iter40's §5 rewrite, so the match-strings were
+re-checked): the Step-2 §7 replace-block matches lines 303--309 verbatim, the Step-3 §9
+replace-block matches lines 670--673 verbatim, and the Step-1 anchor `\subsection{Cross-protein
+generalization}` is at line 605 (its preceding `\end{figure}` at line 603). Required macros are
+loaded: `natbib` (line 97 of `icml2025.sty`) provides `\citet`, and `cleveref` (line 19 of the
+`.tex`) provides `\cref`. So the patch still applies cleanly; re-run this currency check if the
+paper is edited again before the artifact lands.
+
 ## Step 0 — pull + commit the artifact, run the guard
 ```
 modal volume get phaseagent-data outputs/epistasis/gen_design.json outputs/epistasis/
@@ -35,7 +44,7 @@ generator concentrated on the highest-function combinations"). Drop the `\citep`
 artifact does not support; the guard already keeps the tree green without edits.
 
 ## Step 1 — new results subsection
-Insert AFTER `\end{figure}` of `tab:model2`/`fig:model2` (current line 604, i.e. right
+Insert AFTER `\end{figure}` of `tab:model2`/`fig:model2` (current line 603, i.e. right
 before `\subsection{Cross-protein generalization}` at line 605) in `paper/epistasis_icml.tex`:
 
 ```latex
