@@ -63,6 +63,11 @@ emitting `ICML_READY`. Do NOT declare ICML_READY until this is resolved.
 
 ## Final-audit checklist (do before ICML_READY, once B1 is resolved)
 - Re-read the compiled PDF end-to-end for any stale forward-reference or orphan figure.
-- Confirm every committed figure under `paper/figures_epistasis/` that the paper does
-  NOT cite is either cited or intentionally unused (no orphan implied as a result).
+- ~~Confirm every committed figure under `paper/figures_epistasis/` that the paper does
+  NOT cite is either cited or intentionally unused (no orphan implied as a result).~~
+  **RESOLVED iter16:** the 7 uncited figures were audited — fig4 (zero-shot headroom)
+  and fig8 (Model 1) were cited (both regenerate from committed data), the remaining 5
+  (fig1, fig5, fig6, fig7, fig7a — regenerated only from non-committed `/tmp` raw CSVs)
+  were deleted. Committed figures are now exactly fig2, fig3, fig4, fig8, fig9, all
+  cited and all committed-data-regenerable.
 - Confirm CLAIMS.md has a row for every number in the compiled body.

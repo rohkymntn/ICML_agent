@@ -208,9 +208,28 @@ def main() -> None:
     ap.add_argument("--outdir", default="paper/figures_epistasis")
     ap.add_argument("--atlas-out", default="paper/figures_epistasis/three_layer_atlas.parquet")
     ap.add_argument("--headroom", default="/tmp/epi_headroom.parquet")
+    ap.add_argument("--from-committed", action="store_true",
+                    help="Regenerate the PAPER-CITED figures (fig2, fig3, fig4) from the "
+                         "committed per-protein atlas + headroom parquet, no /tmp inputs.")
     args = ap.parse_args()
 
     _style()
+    outdir = Path(args.outdir)
+    if args.from_committed:
+        # The paper cites fig2/fig3 (decomposition) + fig4 (zero-shot headroom); all three
+        # regenerate from committed artifacts under paper/figures_epistasis + outputs/epistasis.
+        atlas = pd.read_parquet(args.atlas_out)
+        print(f"[figures] committed atlas: {len(atlas)} proteins; "
+              f"median R2 additive {atlas['r2_additive'].median():.3f} -> "
+              f"+global {atlas['r2_global'].median():.3f}; "
+              f"specific std {atlas['spec_std'].median():.3f} kcal/mol")
+        fig2_three_layer(atlas, outdir)
+        fig3_specific(atlas, outdir)
+        hr = pd.read_parquet("outputs/epistasis/headroom_dplm.parquet")
+        fig4_headroom(hr, outdir)
+        print(f"[figures] done (from committed) -> {outdir}")
+        return
+
     print("[figures] loading + fitting global link ...")
     d = load_decomposed(Path(args.decomposed))
     atlas = three_layer_atlas(d)
@@ -220,7 +239,6 @@ def main() -> None:
     print(f"[figures] median R2: additive {atlas['r2_additive'].median():.3f} -> +global {atlas['r2_global'].median():.3f}; "
           f"specific std {atlas['spec_std'].median():.3f} kcal/mol")
 
-    outdir = Path(args.outdir)
     fig1_saturation(d, outdir)
     fig2_three_layer(atlas, outdir)
     fig3_specific(atlas, outdir)

@@ -99,10 +99,15 @@ lift and matched-additive Spearman are positive).
 
 ## Figures
 
+Every committed figure under `paper/figures_epistasis/` is cited in the paper and
+regenerates from a committed data artifact (no orphans; verified iter16).
+
 | Figure | File | Regen script | Committed data source |
 |---|---|---|---|
-| fig2 three-layer $R^2$ | `paper/figures_epistasis/fig2_three_layer_r2.pdf` | `scripts/build_epistasis_figures.py` | `three_layer_atlas.parquet` |
-| fig3 specific epistasis | `paper/figures_epistasis/fig3_specific_epistasis.pdf` | `scripts/build_epistasis_figures.py` | `three_layer_atlas.parquet` |
+| fig2 three-layer $R^2$ | `paper/figures_epistasis/fig2_three_layer_r2.pdf` | `scripts/build_epistasis_figures.py --from-committed` | `three_layer_atlas.parquet` |
+| fig3 specific epistasis | `paper/figures_epistasis/fig3_specific_epistasis.pdf` | `scripts/build_epistasis_figures.py --from-committed` | `three_layer_atlas.parquet` |
+| fig4 zero-shot headroom | `paper/figures_epistasis/fig4_headroom_dplm.pdf` | `scripts/build_epistasis_figures.py --from-committed` | `outputs/epistasis/headroom_dplm.parquet` |
+| fig8 Model 1 (predict) | `paper/figures_epistasis/fig8_model1_function.pdf` | `scripts/build_model1_figure.py` | `outputs/epistasis/model1_oof_{GB1_Olson,GFP}.csv` |
 | fig9 Model 2 design | `paper/figures_epistasis/fig9_model2_design.pdf` | `scripts/model2_design.py` (`figure_model2`) | `model2_oof_GB1.csv` |
 
 ## PENDING — not yet in the paper body (need committed run artifacts)
