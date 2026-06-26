@@ -65,6 +65,23 @@ summary reproduces from the OOF CSV and Model 1 beats the zero-shot floor on dou
 | GB1 Model 1 doubles gain over zero-shot | $+0.34$ | `model1_GB1_Olson_summary.json:delta_doubles` |
 | GFP Model 1 doubles gain over zero-shot | $+0.13$ | `model1_GFP_summary.json:delta_doubles` |
 
+### Bootstrap 95% CIs (Section 7.3 significance sentence) — GROUNDED
+
+Source: `outputs/epistasis/model1_ci.json` — 2,000-resample percentile bootstrap over
+the held-out doubles of the same committed `model1_oof_{GB1_Olson,GFP}.csv`
+(`scripts/bootstrap_model1_ci.py`, seed 0; point estimates equal the committed
+summaries, and the per-resample Model 1 − zero-shot difference is paired).
+Guarded by `tests/test_model1_ci.py` (no-drift of point estimates + delta CI excludes 0).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| GB1 Model 1 doubles Spearman 95% CI | $[0.34, 0.38]$ | `model1_ci.json:assays.GB1_Olson.model1_doubles_ci95` |
+| GFP Model 1 doubles Spearman 95% CI | $[0.12, 0.16]$ | `model1_ci.json:assays.GFP.model1_doubles_ci95` |
+| GB1 zero-shot Spearman 95% CI | $[0.00, 0.04]$ | `model1_ci.json:assays.GB1_Olson.zeroshot_ci95` |
+| GFP zero-shot Spearman 95% CI (includes 0) | $[-0.01, 0.02]$ | `model1_ci.json:assays.GFP.zeroshot_ci95` |
+| GB1 gain-over-zero-shot 95% CI | $[0.31, 0.36]$ | `model1_ci.json:assays.GB1_Olson.delta_ci95` |
+| GFP gain-over-zero-shot 95% CI | $[0.11, 0.16]$ | `model1_ci.json:assays.GFP.delta_ci95` |
+
 ## Cross-protein generalization, e2e LoRA fine-tune (Section 7.5 / Table "e2e") — GROUNDED
 
 Source: `outputs/epistasis/e2e_results.json` (end-to-end LoRA fine-tune of DPLM-650M

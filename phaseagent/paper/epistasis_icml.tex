@@ -414,7 +414,14 @@ The same residual that is invisible to the zero-shot score is, however,
 (\cref{sec:model1}) trained on each assay and evaluated out-of-fold lifts the
 held-out-double Spearman from the near-zero zero-shot floor to $0.36$ on GB1 and
 $0.14$ on GFP (\cref{tab:model1}, \cref{fig:model1}) -- a $+0.34$ and $+0.13$ gain
-over zero-shot.
+over zero-shot. Bootstrapping the held-out doubles ($2{,}000$ resamples) puts the
+Model 1 Spearman at $0.36$ (95\% CI $[0.34, 0.38]$) on GB1 and $0.14$
+($[0.12, 0.16]$) on GFP, while the zero-shot floor stays at $0.02$
+($[0.00, 0.04]$) and $0.005$ ($[-0.01, 0.02]$, a CI that includes zero -- the
+zero-shot score is statistically indistinguishable from chance on GFP function);
+the paired-resample gain over zero-shot is significant on both assays
+(95\% CI $[0.31, 0.36]$ and $[0.11, 0.16]$, both excluding zero). Source:
+\texttt{outputs/epistasis/model1\_ci.json}.
 The harder held-out-\emph{position} split, where every double at the test
 residues is removed so the head must place couplings at positions it never saw
 during training, still clears the floor ($0.12$ on GB1, $0.08$ on GFP). Because
