@@ -1,0 +1,11 @@
+{
+  "assay": "GFP",
+  "n_doubles": 11954,
+  "dim": 1280,
+  "use_shift": true,
+  "zeroshot_spearman": 0.004804299339342927,
+  "model1_doubles_spearman": 0.13801978317493185,
+  "model1_position_spearman": 0.07900806757136514,
+  "delta_doubles": 0.13321548383558893,
+  "delta_position": 0.07420376823202221
+}
