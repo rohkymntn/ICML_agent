@@ -36,7 +36,8 @@ These numbers from `HANDOFF_EPISTASIS_2026.md` are NOT yet committed as artifact
 under `outputs/epistasis/` and therefore do NOT appear as numbers in the paper.
 They are folded in (with a row above) only when their artifact is committed.
 
-- Zero-shot DPLM PLL epistasis Spearman: stability ≈0.25, GB1 ≈0.02, GFP ≈0.005 — needs committed scoring CSV.
+- Zero-shot DPLM PLL epistasis Spearman, STABILITY (Megascale doubles): **RUNNING** — `run_headroom_gate` (`ap-a7hQxHVfIOYVuoil7e6Go7`); will commit `outputs/epistasis/headroom_summary.json` (keys `overall_spearman`, `median_per_protein_spearman`, `frac_proteins_pp_spearman_gt_0p2`) + `headroom_dplm.parquet`. Folds into §7.2 (stability side of the zero-shot contrast) when committed.
+- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): pending the function feature/scoring pipeline (`extract_function_features` / function PLL scoring) — needs committed scoring CSV.
 - Model 1 held-out doubles / held-out positions Spearman (GB1, GFP) — needs committed `train_model1.py` output.
 - Model 2 gain-of-function recovery + matched-additive within-bin Spearman — needs committed `model2_design.py` output.
 - e2e cross-protein median held-out-protein Spearman — needs committed `outputs/epistasis/e2e_results.json` (run `ap-ayiJz1iYjfF0M5qUt0Rhaj`).
