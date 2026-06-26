@@ -73,6 +73,51 @@ Round each number the way the rest of the paper rounds (2 sig figs / 2 decimals;
 is already rounded to 3 in the artifact). Keep the sign sentence accurate to the actual
 ordering — re-read the JSON before committing the words "above"/"short of".
 
+## Step 1B — alternate subsection, paste this INSTEAD of Step 1 if the directional guard SKIPS
+The Step 1 block above states the WIN ordering (gen above DPLM/random/overall, under the
+ceiling). If `test_gen_design_reward_guidance_outcome` SKIPS, the most likely reason (per the
+iter43 risk note) is `generated_lib_mean_function <= unconditioned_DPLM_mean`: WT GB1 has a
+high-function binding interface, so an unconditioned DPLM already samples strong combos.
+For THAT case, paste this block instead — it reports every number (so DoD #4's "computed and
+tabulated" holds regardless of outcome) without asserting a beat-the-DPLM win, and the honest
+"does not clear the unconditioned library" conclusion strengthens, not weakens, the paper's
+thesis (sequence-LM guidance cannot capture specific epistasis on its own):
+
+```latex
+\subsection{A discrete-diffusion guidance baseline}
+\label{sec:results-gen}
+
+For completeness we benchmark one strong generative design baseline: a reward-weighted
+LoRA fine-tune of DPLM-650M that generates multi-mutants by iterative masked-diffusion
+sampling, the discrete-diffusion reward-guidance approach of \citet{wang2025drakes} and
+\citet{li2024svdd}. Because this method edits \emph{every} site, we run it on the complete
+four-site combinatorial GB1 assay (Wu, $149{,}360$ measured combinations
+\citep{wu2016adaptation}), where every sampled combination has a ground-truth function
+score; it is therefore a separate experiment from the pairwise Model~2 ranking task, not a
+head-to-head competitor. After {{epochs}} epochs of reward-weighted fine-tuning, the
+generated library reaches mean function ${{generated_lib_mean_function}}$, compared with the
+unconditioned DPLM library (${{unconditioned_DPLM_mean}}$), a random library
+(${{random_lib_mean}}$), the assay-wide mean (${{library_mean_overall}}$), and the
+top-library ceiling (${{top_library_ceiling}}$); coverage of measured combinations is
+${{coverage}}$. On this closed assay the reward-guided generator does not clear the
+unconditioned-DPLM library: the wild-type GB1 interface is already high-function, so an
+unconditioned protein LM samples strong combinations, and it remains far short of the
+measured-epistasis ceiling. This reinforces our central finding -- guidance from a sequence
+LM, like the zero-shot reranker, does not by itself capture the specific epistasis a
+representation-trained predictor exposes. All numbers derive from the committed
+\texttt{outputs/epistasis/gen\_design.json}.
+```
+Before pasting, re-read the JSON and make the comparison verbs match the actual ordering
+(e.g. if gen still beats random/overall but not DPLM, say "above the random and assay-wide
+libraries but below the unconditioned DPLM library"). If instead the skip reason is
+`generated_lib_mean_function > top_library_ceiling` (mode collapse onto the best combos),
+use the Step 1 win-case block but replace "but short of the top-library ceiling
+(${{top_library_ceiling}}$)" with "in fact exceeding the top-$N$ library mean
+(${{top_library_ceiling}}$) by concentrating on the highest-function combinations" and drop
+the "short of the gain available to a method that exploits measured specific epistasis"
+clause (see the CONTINGENCY note in Step 0). Either way Step 4's CLAIMS rows and Steps 2--3
+reconciliation are unchanged — only the Step 1 prose differs by branch.
+
 ## Step 2 — RECONCILE §7-baselines (REQUIRED; currently lines 304-309)
 Replace:
 ```latex
