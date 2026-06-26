@@ -224,8 +224,10 @@ antagonistic one. Model 2 ranks these candidates by predicted specific epistasis
 (from Model 1) and selects the top fraction.
 
 We report two quantities. (i) \emph{Gain-of-function recovery}: the measured
-function of the selected variants versus the pool mean and versus the oracle
-top-selection. (ii) The \emph{matched-additive control}: within narrow bins of
+function of the selected variants versus the additive pool mean, versus the
+oracle top-selection, and versus a \emph{best-of-$N$ rerank} that scores the same
+pool with the zero-shot DPLM PLL epistasis (the standard PLM-as-reward design
+baseline). (ii) The \emph{matched-additive control}: within narrow bins of
 additive prediction (so additive value is held fixed), the rank correlation
 between predicted and measured specific epistasis. A positive within-bin
 correlation is, by construction, signal that the additive model cannot access.
@@ -425,10 +427,60 @@ out-of-fold predictions in \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,G
 \subsection{Model 2: ranking by predicted epistasis finds gain-of-function}
 \label{sec:results-model2}
 
-Model 2 (\cref{sec:model2}) is evaluated by gain-of-function recovery and the
-matched-additive within-bin Spearman, with each number traced to a committed
-\texttt{outputs/epistasis/model2\_oof\_*.csv} in \texttt{CLAIMS.md}; the
-quantitative table is folded in once its design run artifact is committed.
+On the 12{,}000 held-out GB1 double mutants, we form the design pool from the
+additively-mediocre candidates (those below the median additive prediction, where
+the additive model rates everything roughly equal) and select the top $10\%$ by
+each reward. Ranking by Model 1's predicted specific epistasis lifts the mean
+measured binding of the selection by $+1.09$ over the pool, recovering most of the
+$+1.62$ oracle lift available to a perfect epistasis ranker
+(\cref{tab:model2}). The standard PLM-as-reward design baseline -- best-of-$N$
+reranking by the zero-shot DPLM PLL epistasis -- does \emph{worse than random
+selection} from the pool ($-0.22$ lift), because that score is essentially blind
+to functional epistasis (\cref{tab:model1}). The matched-additive control closes
+the loop: within deciles of the additive prediction, where additive value is held
+fixed, the median Spearman between predicted and measured specific epistasis is
+$0.28$ (10 bins) -- by construction, signal the additive model cannot access, so
+the recovered gain is genuine epistasis rather than relearned additivity
+(\cref{fig:model2}). All numbers derive from the committed
+\texttt{outputs/epistasis/model2\_oof\_GB1.csv}.
+
+\begin{table}[t]
+  \centering
+  \caption{Model 2 design on held-out GB1 doubles ($n=12{,}000$): mean measured
+  binding of the top $10\%$ selected from the additively-mediocre pool by each
+  reward, and the lift over the additive pool mean. Ranking by Model 1's predicted
+  epistasis recovers gain-of-function combinations the additive model rates equal;
+  best-of-$N$ reranking by the zero-shot DPLM PLL reward is worse than random.
+  Source: \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
+  \texttt{model2\_GB1\_summary.json}.}
+  \label{tab:model2}
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    Selection rule & Top-10\% binding & Lift \\
+    \midrule
+    Additive (pool mean) & $-3.62$ & $0.00$ \\
+    Best-of-$N$ rerank (zero-shot DPLM PLL) & $-3.84$ & $-0.22$ \\
+    Model 1 (predicted epistasis) & $-2.53$ & $+1.09$ \\
+    Oracle (true epistasis) & $-2.00$ & $+1.62$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures_epistasis/fig9_model2_design.pdf}
+  \caption{\textbf{Model 2 design.} (A) Mean measured binding of the top fraction
+  selected from the additively-mediocre GB1 pool: ranking by Model 1's predicted
+  epistasis (red) recovers gain-of-function combinations the additive baseline
+  (grey) rates equal and best-of-$N$ reranking by the zero-shot DPLM PLL reward
+  (grey squares) cannot find, approaching the oracle (blue). (B) Matched-additive
+  control: within-bin Spearman between predicted and measured specific epistasis
+  across additive-prediction deciles. Regenerates from
+  \texttt{outputs/epistasis/model2\_oof\_GB1.csv} via
+  \texttt{scripts/model2\_design.py}.}
+  \label{fig:model2}
+\end{figure}
 
 \subsection{Cross-protein generalization}
 \label{sec:results-e2e}

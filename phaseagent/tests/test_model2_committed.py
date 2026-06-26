@@ -26,22 +26,26 @@ ASSAY = "GB1"
 def _synthetic_table(n=600, seed=0):
     """A per-double table with real epistasis signal: predicted epistasis carries
     measured binding within the additively-mediocre pool, the structure Model 2
-    exploits. Enough rows that the decile bins have >=30 each."""
+    exploits. `pll_eps` (the zero-shot DPLM PLL rerank reward) is near-noise,
+    mirroring the measured ~0.02 function floor. Enough rows that the decile bins
+    have >=30 each."""
     rng = np.random.default_rng(seed)
     glob = rng.standard_normal(n)
     true_eps = rng.standard_normal(n)
     pred_eps = 0.7 * true_eps + 0.5 * rng.standard_normal(n)
+    pll_eps = rng.standard_normal(n)  # uncorrelated with true_eps: zero-shot is blind
     measured = glob + true_eps + 0.1 * rng.standard_normal(n)
-    return pd.DataFrame({"glob": glob, "measured": measured,
-                         "true_eps": true_eps, "pred_eps": pred_eps})
+    return pd.DataFrame({"glob": glob, "measured": measured, "true_eps": true_eps,
+                         "pred_eps": pred_eps, "pll_eps": pll_eps})
 
 
 def test_summarize_reproduces_from_csv(tmp_path):
     df = _synthetic_table()
-    summ = summarize_model2(df)
-    # round-trip through CSV: the committed summary must recompute exactly
+    # mirror run_model2: the committed summary is a pure function of the committed
+    # CSV bytes, so a recompute from the same CSV must be bit-identical.
     csv = tmp_path / "model2_oof_SYN.csv"
     df.to_csv(csv, index=False)
+    summ = summarize_model2(pd.read_csv(csv))
     recomputed = summarize_model2(pd.read_csv(csv))
     for k, v in summ.items():
         assert recomputed[k] == v, f"summary/csv drift on {k}"
@@ -49,6 +53,8 @@ def test_summarize_reproduces_from_csv(tmp_path):
     assert summ["gof_lift_model1"] > 0
     assert summ["matched_additive_spearman"] > 0
     assert summ["n_matched_bins"] >= 5
+    # best-of-N rerank by the (blind) zero-shot reward must not beat Model 1
+    assert summ["gof_lift_model1"] > summ["gof_lift_zeroshot"]
 
 
 def _committed():

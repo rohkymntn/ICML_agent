@@ -1,0 +1,12 @@
+{
+  "n_doubles": 12000,
+  "pool_mean_binding": -3.617890389705358,
+  "gof_top10pct_model1": -2.527046962865511,
+  "gof_top10pct_zeroshot": -3.8380535029513214,
+  "gof_top10pct_oracle": -2.003543523736543,
+  "gof_lift_model1": 1.090843426839847,
+  "gof_lift_zeroshot": -0.2201631132459636,
+  "matched_additive_spearman": 0.2800230235501447,
+  "n_matched_bins": 10,
+  "assay": "GB1"
+}

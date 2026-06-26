@@ -67,18 +67,24 @@ def build_oof_table(feat, assay_csv, epochs=200):
         rec = info.get(f"{tok1}:{tok2}")
         if rec is None:
             continue
-        rows.append((rec["ddG_global"], rec["DMS_score"], rec["epsilon_specific"], float(oof[k])))
-    return pd.DataFrame(rows, columns=["glob", "measured", "true_eps", "pred_eps"]).dropna()
+        # pll[k] = zero-shot DPLM PLL epistasis for this double (the best-of-N
+        # rerank reward model — PLM-as-reward, the standard design baseline).
+        rows.append((rec["ddG_global"], rec["DMS_score"], rec["epsilon_specific"],
+                     float(oof[k]), float(pll[k])))
+    return pd.DataFrame(
+        rows, columns=["glob", "measured", "true_eps", "pred_eps", "pll_eps"]).dropna()
 
 
 def summarize_model2(df):
     """Derive Model 2's paper numbers purely from the committed per-double table
-    (columns: glob, measured, true_eps, pred_eps).
+    (columns: glob, measured, true_eps, pred_eps, pll_eps).
 
     (A) gain-of-function recovery: within the additively-MEDIOCRE pool (below the
         median global prediction, where additive rates everything low and cannot
-        tell designs apart), the mean measured binding of the top 10% ranked by
-        Model 1's predicted epistasis, vs the pool mean and the oracle.
+        tell designs apart), the mean measured binding of the top 10% reranked by
+        each reward model — Model 1's predicted epistasis, the zero-shot DPLM PLL
+        epistasis (best-of-N rerank, the standard PLM-as-reward design baseline),
+        and the oracle — vs the additive pool mean.
     (B) matched-additive control: median over global-prediction deciles of the
         within-bin Spearman(predicted epistasis, measured) — epistasis signal
         that survives at matched additive is not relearned additivity."""
@@ -86,9 +92,10 @@ def summarize_model2(df):
     meas = df["measured"].to_numpy()
     pred_eps = df["pred_eps"].to_numpy()
     true_eps = df["true_eps"].to_numpy()
+    pll_eps = df["pll_eps"].to_numpy()
 
     low = base < np.median(base)
-    meas_low, pe_low, te_low = meas[low], pred_eps[low], true_eps[low]
+    meas_low, pe_low, te_low, pll_low = meas[low], pred_eps[low], true_eps[low], pll_eps[low]
 
     def topmean(score, f):
         k = max(1, int(len(score) * f))
@@ -97,6 +104,7 @@ def summarize_model2(df):
     pool_mean = float(meas_low.mean())
     top10_m1 = topmean(pe_low, 0.1)
     top10_orc = topmean(te_low, 0.1)
+    top10_zs = topmean(pll_low, 0.1)
 
     qs = np.quantile(base, np.linspace(0, 1, 11))
     mb = []
@@ -110,8 +118,10 @@ def summarize_model2(df):
         "n_doubles": int(len(df)),
         "pool_mean_binding": pool_mean,
         "gof_top10pct_model1": top10_m1,
+        "gof_top10pct_zeroshot": top10_zs,
         "gof_top10pct_oracle": top10_orc,
         "gof_lift_model1": top10_m1 - pool_mean,
+        "gof_lift_zeroshot": top10_zs - pool_mean,
         "matched_additive_spearman": matched,
         "n_matched_bins": int(len(mb)),
     }
@@ -122,8 +132,12 @@ def run_model2(feat, assay_csv, assay="GB1", out="outputs/epistasis", epochs=200
     df = build_oof_table(feat, assay_csv, epochs=epochs)
     outdir = Path(out)
     outdir.mkdir(parents=True, exist_ok=True)
-    df.to_csv(outdir / f"model2_oof_{assay}.csv", index=False)
-    summ = summarize_model2(df)
+    csv_path = outdir / f"model2_oof_{assay}.csv"
+    df.to_csv(csv_path, index=False)
+    # summarize from the re-read CSV so the committed summary is a bit-exact pure
+    # function of the committed CSV bytes (the headroom no-drift guarantee; a mean
+    # of selected values is not rank-robust to a 1-ULP serialization shift).
+    summ = summarize_model2(pd.read_csv(csv_path))
     summ["assay"] = assay
     (outdir / f"model2_{assay}_summary.json").write_text(json.dumps(summ, indent=2))
     return summ
@@ -144,6 +158,7 @@ def figure_model2(csv, out="paper/figures_epistasis"):
     low = base < np.median(base)
     meas_low = meas[low]
     pe_low, te_low = df["pred_eps"].to_numpy()[low], df["true_eps"].to_numpy()[low]
+    pll_low = df["pll_eps"].to_numpy()[low]
     pool = meas_low.mean()
 
     def topmean(score, f):
@@ -152,6 +167,7 @@ def figure_model2(csv, out="paper/figures_epistasis"):
 
     em = [topmean(pe_low, f) for f in FRACS]
     eo = [topmean(te_low, f) for f in FRACS]
+    ez = [topmean(pll_low, f) for f in FRACS]
 
     qs = np.quantile(base, np.linspace(0, 1, 11))
     mb = []
@@ -163,6 +179,7 @@ def figure_model2(csv, out="paper/figures_epistasis"):
 
     fig, ax = plt.subplots(1, 2, figsize=(9.8, 4.2))
     ax[0].axhline(pool, color=GREY, ls="--", lw=1.5, label="additive baseline (rates these equal)")
+    ax[0].plot([f * 100 for f in FRACS], ez, "s-", color="#7B7B7B", lw=1.4, label="best-of-N rerank (zero-shot DPLM PLL)")
     ax[0].plot([f * 100 for f in FRACS], em, "o-", color=RED, lw=2.0, label="Model 1 (rank by predicted epistasis)")
     ax[0].plot([f * 100 for f in FRACS], eo, "o--", color=BLUE, lw=1.4, label="oracle (true epistasis)")
     ax[0].set_xlabel("Top fraction selected among additively-mediocre designs (%)")
@@ -196,6 +213,7 @@ def main():
     print(f"[model2] {s['n_doubles']} held-out doubles merged")
     print(f"[model2] gain-of-function recovery (additively-mediocre pool, mean binding={s['pool_mean_binding']:.2f}): "
           f"top-10% by Model1={s['gof_top10pct_model1']:.2f} (lift +{s['gof_lift_model1']:.2f})  "
+          f"zero-shot rerank={s['gof_top10pct_zeroshot']:.2f} (lift +{s['gof_lift_zeroshot']:.2f})  "
           f"oracle={s['gof_top10pct_oracle']:.2f}")
     print(f"[model2] matched-additive: median within-bin Spearman(pred_eps, measured) = "
           f"{s['matched_additive_spearman']:.3f} over {s['n_matched_bins']} bins")

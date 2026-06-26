@@ -74,12 +74,36 @@ and evaluated on the 25 held-out proteins that contribute no training examples; 
 | Fraction of held-out proteins with $\rho>0.2$ | 0.80 | `e2e_results.json:frac_heldout_prot_gt_0p2` |
 | Zero-shot DPLM PLL reference | $0.25$ | `e2e_results.json:zero_shot_reference` |
 
+## Model 2 design + best-of-N rerank baseline (Section 7.4 / Table "model2", Fig "model2") — GROUNDED
+
+Source: `outputs/epistasis/model2_oof_GB1.csv` (raw per-double table `glob, measured,
+true_eps, pred_eps, pll_eps` from a 5-fold OOF retrain of Model 1 on the complete
+GB1-Olson pairwise assay) + `model2_GB1_summary.json` (the paper numbers, a bit-exact
+pure function of the committed CSV via `summarize_model2`). The design pool is the
+additively-mediocre subset (below median `glob`); each rule selects its top 10%.
+Guarded by `tests/test_model2_committed.py` (reproduces from CSV; asserts the Model 1
+lift and matched-additive Spearman are positive).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Held-out GB1 doubles | 12,000 | `model2_GB1_summary.json:n_doubles` |
+| Additive pool mean binding | $-3.62$ | `model2_GB1_summary.json:pool_mean_binding` |
+| Model 1 top-10% binding | $-2.53$ | `model2_GB1_summary.json:gof_top10pct_model1` |
+| Best-of-$N$ rerank (zero-shot DPLM PLL) top-10% binding | $-3.84$ | `model2_GB1_summary.json:gof_top10pct_zeroshot` |
+| Oracle top-10% binding | $-2.00$ | `model2_GB1_summary.json:gof_top10pct_oracle` |
+| Model 1 lift over additive pool | $+1.09$ | `model2_GB1_summary.json:gof_lift_model1` |
+| Best-of-$N$ rerank lift over additive pool | $-0.22$ | `model2_GB1_summary.json:gof_lift_zeroshot` |
+| Oracle lift over additive pool | $+1.62$ | `gof_top10pct_oracle` − `pool_mean_binding` |
+| Matched-additive within-bin Spearman | $0.28$ | `model2_GB1_summary.json:matched_additive_spearman` |
+| Matched-additive bins | 10 | `model2_GB1_summary.json:n_matched_bins` |
+
 ## Figures
 
 | Figure | File | Regen script | Committed data source |
 |---|---|---|---|
 | fig2 three-layer $R^2$ | `paper/figures_epistasis/fig2_three_layer_r2.pdf` | `scripts/build_epistasis_figures.py` | `three_layer_atlas.parquet` |
 | fig3 specific epistasis | `paper/figures_epistasis/fig3_specific_epistasis.pdf` | `scripts/build_epistasis_figures.py` | `three_layer_atlas.parquet` |
+| fig9 Model 2 design | `paper/figures_epistasis/fig9_model2_design.pdf` | `scripts/model2_design.py` (`figure_model2`) | `model2_oof_GB1.csv` |
 
 ## PENDING — not yet in the paper body (need committed run artifacts)
 
@@ -87,5 +111,4 @@ These numbers from `HANDOFF_EPISTASIS_2026.md` are NOT yet committed as artifact
 under `outputs/epistasis/` and therefore do NOT appear as numbers in the paper.
 They are folded in (with a row above) only when their artifact is committed.
 
-- Model 2 gain-of-function recovery + matched-additive within-bin Spearman: **`feat_GB1_Olson.npz` DONE on volume (iter8); GB1 assay CSV pre-staged at `/tmp/SPG1_STRSG_Olson_2014.csv` (iter11).** **`model2_design.py` now writes the committed artifacts (iter12):** `model2_oof_GB1.csv` (raw per-double `glob, measured, true_eps, pred_eps`) + `model2_GB1_summary.json` (keys `pool_mean_binding`, `gof_top10pct_model1`, `gof_lift_model1`, `matched_additive_spearman`, `n_matched_bins`), derived purely from the CSV via `summarize_model2`. Guard `tests/test_model2_committed.py` in place (synthetic drift-guard passes; committed-artifact guard skips until landed). Pending only the CPU run-to-completion (`python scripts/train_model1.py`-style: `python scripts/model2_design.py --feat /tmp/feat_GB1_Olson.npz --assay-csv /tmp/SPG1_STRSG_Olson_2014.csv --assay GB1 --out outputs/epistasis --figure`, ~9 min) + commit, then fold into a paper Model 2 table + a row here.
-- Function decomposition (GFP, GB1-Olson, GRB2, PABP global-link $R^2$) — needs committed function-assay decomposition table.
+- Function decomposition (GFP, GB1-Olson, GRB2, PABP global-link $R^2$) — needs committed function-assay decomposition table. (NOT cited in the paper; the function story rests on Model 1 / Model 2 / e2e, all grounded above.)
