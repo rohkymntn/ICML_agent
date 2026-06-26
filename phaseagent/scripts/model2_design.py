@@ -190,7 +190,7 @@ def figure_model2(csv, out="paper/figures_epistasis"):
 
     ax[1].bar(range(len(mb)), mb, color=RED, alpha=0.85)
     ax[1].axhline(0, color="#222", lw=0.8)
-    ax[1].set_xlabel("Additive-prediction bin (low → high)")
+    ax[1].set_xlabel("Additive+global prediction bin (low → high)")
     ax[1].set_ylabel("Spearman(predicted epistasis, measured)")
     ax[1].set_title(f"B   Matched-additive control (median ρ={matched:.2f})\nepistasis signal additive cannot see",
                     loc="left", fontsize=12, fontweight="bold")
