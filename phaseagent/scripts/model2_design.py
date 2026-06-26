@@ -204,13 +204,20 @@ def figure_model2(csv, out="paper/figures_epistasis"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--feat", required=True)
-    ap.add_argument("--assay-csv", required=True)
+    ap.add_argument("--feat")
+    ap.add_argument("--assay-csv")
     ap.add_argument("--assay", default="GB1")
     ap.add_argument("--out", default="outputs/epistasis")
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--figure", action="store_true", help="also regenerate fig9 from the committed CSV")
+    ap.add_argument("--figure-only", action="store_true",
+                    help="regenerate fig9 from the committed model2_oof CSV only (no training, no feat/assay-csv needed)")
     args = ap.parse_args()
+    if args.figure_only:
+        figure_model2(Path(args.out) / f"model2_oof_{args.assay}.csv")
+        return
+    if not args.feat or not args.assay_csv:
+        ap.error("--feat and --assay-csv are required unless --figure-only is set")
     s = run_model2(args.feat, args.assay_csv, assay=args.assay, out=args.out, epochs=args.epochs)
     print(f"[model2] {s['n_doubles']} held-out doubles merged")
     print(f"[model2] gain-of-function recovery (additively-mediocre pool, mean binding={s['pool_mean_binding']:.2f}): "
