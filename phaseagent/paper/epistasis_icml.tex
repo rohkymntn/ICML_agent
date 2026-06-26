@@ -224,9 +224,10 @@ table in \texttt{outputs/epistasis/decomposition\_atlas.csv}.
 Model 1 predicts the specific-epistasis residual $\eps_{ij}$ of a double mutant
 at positions $i,j$ from a frozen DPLM-650M. Let $H \in \mathbb{R}^{L \times d}$ be
 the last-layer hidden states of the wildtype sequence. We take the
-representations $H_i, H_j$ at the two mutated positions, project them, and form a
-bilinear coupling feature $\text{proj}(H_i) \odot \text{proj}(H_j)$, concatenated
-with amino-acid identity embeddings of the two substitutions and the zero-shot
+representations $H_i, H_j$ at the two mutated positions, project them, and
+concatenate the two projections $\text{proj}(H_i),\text{proj}(H_j)$, their
+bilinear product $\text{proj}(H_i) \odot \text{proj}(H_j)$, amino-acid identity
+embeddings of the two substitutions, and the zero-shot
 DPLM pseudo-log-likelihood (PLL) epistasis
 \begin{equation}
   \label{eq:zs}

@@ -12,19 +12,19 @@ The 11 keys are: `assay, positions, epochs, generated_lib_mean_function,
 generated_NOVEL_lib_mean_function, n_novel_generated, coverage, unconditioned_DPLM_mean,
 random_lib_mean, top_library_ceiling, library_mean_overall`.
 
-**Patch currency — re-verified iter50 against the live paper** (the paper was edited
-after this patch was written, e.g. iter40's §5 rewrite, iter47's §9-limitations prose
-fix, iter48's §7.3 "noise cannot be predicted out of fold" sentence, iter49's §7
-implementation-details fix, and iter50's §5/§7.4 fix renaming the Model 2 pool/control
-binning variable from "additive prediction" to "additive$+$global prediction" to match
-the code (`ddG_global`) and §4 — which added one wrapped line in §5, shifting every
-anchor below it +1; so the match-strings were re-checked): the Step-2 §7 replace-block matches lines
-305--310 verbatim (the `Stronger generative comparators ... matched baselines` block,
-above iter50's edits only by line number — text unchanged), the Step-3 §9 replace-block
-matches lines 676--679 verbatim (the `We do not make a generative design claim...`
-block; its text is unchanged, shifted +1 by iter50's §5 line), and the Step-1 anchor
-`\subsection{Cross-protein generalization}` is at line 610
-(its preceding `\end{figure}` at line 608). Required macros are
+**Patch currency — re-verified iter53 against the live paper** (the paper was edited
+after this patch was written; most recently iter49's §7 implementation-details fix,
+iter50's §5/§7.4 Model 2 pool/control binning rename, iter52's line-neutral 12.9M→12.85M
+fix, and iter53's §4 Model 1 head fix renaming the coupling feature to "the two
+projections, their bilinear product" to match the code (`parts=[pi,pj,pi*pj,...]`) and §7
+— which added one wrapped line in §4, shifting every anchor below it +1; so the
+match-strings were re-checked): the Step-2 §7 replace-block matches lines
+306--311 verbatim (the `Stronger generative comparators ... matched baselines` block,
+text unchanged), the Step-3 §9 replace-block
+matches lines 677--680 verbatim (the `We do not make a generative design claim...`
+block; its text is unchanged, shifted +1 by iter53's §4 line), and the Step-1 anchor
+`\subsection{Cross-protein generalization}` is at line 611
+(its preceding `\end{figure}` at line 609). Required macros are
 loaded: `natbib` (line 97 of `icml2025.sty`) provides `\citet`, and `cleveref` (line 19 of the
 `.tex`) provides `\cref`. So the patch still applies cleanly; re-run this currency check if the
 paper is edited again before the artifact lands.
@@ -68,7 +68,7 @@ artifact does not support; the guard already keeps the tree green without edits.
 
 ## Step 1 — new results subsection
 Insert AFTER `\end{figure}` of `tab:model2`/`fig:model2` (current line 608, i.e. right
-before `\subsection{Cross-protein generalization}` at line 610) in `paper/epistasis_icml.tex`:
+before `\subsection{Cross-protein generalization}` at line 611) in `paper/epistasis_icml.tex`:
 
 ```latex
 \subsection{A discrete-diffusion guidance baseline}
@@ -141,7 +141,7 @@ the "short of the gain available to a method that exploits measured specific epi
 clause (see the CONTINGENCY note in Step 0). Either way Step 4's CLAIMS rows and Steps 2--3
 reconciliation are unchanged — only the Step 1 prose differs by branch.
 
-## Step 2 — RECONCILE §7-baselines (REQUIRED; currently lines 305-310)
+## Step 2 — RECONCILE §7-baselines (REQUIRED; currently lines 306-311)
 Replace:
 ```latex
 Stronger
@@ -162,7 +162,7 @@ candidates, so for the ranking claim the additive and best-of-$N$ controls remai
 the matched baselines.
 ```
 
-## Step 3 — RECONCILE §9-limitations (REQUIRED; currently lines 676-679)
+## Step 3 — RECONCILE §9-limitations (REQUIRED; currently lines 677-680)
 Replace:
 ```latex
 We do not make a generative design claim and therefore do not benchmark
