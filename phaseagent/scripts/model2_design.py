@@ -195,7 +195,8 @@ def figure_model2(csv, out="paper/figures_epistasis"):
                     loc="left", fontsize=12, fontweight="bold")
     fig.tight_layout()
     outp = Path(out)
-    fig.savefig(outp / "fig9_model2_design.pdf", bbox_inches="tight")
+    # metadata CreationDate=None drops the embedded timestamp so the PDF is byte-reproducible.
+    fig.savefig(outp / "fig9_model2_design.pdf", bbox_inches="tight", metadata={"CreationDate": None})
     fig.savefig(outp / "fig9_model2_design.png", bbox_inches="tight")
     print("saved fig9_model2_design")
 

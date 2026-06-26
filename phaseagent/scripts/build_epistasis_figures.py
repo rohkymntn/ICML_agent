@@ -56,7 +56,9 @@ GREY = "#9A9A9A"
 
 def _save(fig, outdir: Path, name: str) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(outdir / f"{name}.pdf", bbox_inches="tight")
+    # metadata CreationDate=None drops the embedded timestamp so the PDF is
+    # byte-reproducible (regenerate-and-diff actually verifies the figure).
+    fig.savefig(outdir / f"{name}.pdf", bbox_inches="tight", metadata={"CreationDate": None})
     fig.savefig(outdir / f"{name}.png", bbox_inches="tight")
     plt.close(fig)
     print(f"  saved {name}.pdf / .png")

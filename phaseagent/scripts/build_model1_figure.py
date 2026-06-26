@@ -80,7 +80,8 @@ def main(out="paper/figures_epistasis"):
 
     fig.tight_layout()
     outp = Path(out)
-    fig.savefig(outp / "fig8_model1_function.pdf", bbox_inches="tight")
+    # metadata CreationDate=None drops the embedded timestamp so the PDF is byte-reproducible.
+    fig.savefig(outp / "fig8_model1_function.pdf", bbox_inches="tight", metadata={"CreationDate": None})
     fig.savefig(outp / "fig8_model1_function.png", bbox_inches="tight")
     print("saved fig8_model1_function")
 
