@@ -303,12 +303,13 @@ specific-epistasis residual defined in \cref{sec:decomp}.
 (i) \emph{Additive}: the sum-of-singles prediction, the structural null for any
 epistasis claim. (ii) \emph{Zero-shot DPLM PLL}: \cref{eq:zs}, the pretrained-PLM
 epistasis score with no task labels. (iii) For design, \emph{best-of-$N$
-reranking} of randomly drawn candidates and an additive-ranking control. Stronger
-generative comparators -- discrete-diffusion guidance
-\citep{gruver2023protein,nisonoff2025unlocking} and reward-guided refinement
-\citep{wang2025drakes,li2024svdd} -- are required only if a generative design claim
-is made; our Model 2 is a ranking policy over measurable candidates, so the
-additive and best-of-$N$ controls are the matched baselines.
+reranking} of randomly drawn candidates and an additive-ranking control. For design we additionally benchmark one strong generative comparator: a
+discrete-diffusion guidance baseline (reward-weighted fine-tuning of DPLM
+\citep{wang2025drakes,li2024svdd,gruver2023protein,nisonoff2025unlocking}) that
+generates multi-mutants on the complete four-site combinatorial GB1 assay
+(\cref{sec:results-gen}). Model 2 itself is a ranking policy over measurable
+candidates, so for the ranking claim the additive and best-of-$N$ controls remain
+the matched baselines.
 
 \paragraph{Metrics.}
 Variance explained ($R^2$) for the decomposition; Spearman rank correlation
@@ -608,6 +609,27 @@ the committed \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
   \label{fig:model2}
 \end{figure}
 
+\subsection{A discrete-diffusion guidance baseline}
+\label{sec:results-gen}
+
+For completeness we benchmark one strong generative design baseline: a reward-weighted
+LoRA fine-tune of DPLM-650M that generates multi-mutants by iterative masked-diffusion
+sampling, the discrete-diffusion reward-guidance approach of \citet{wang2025drakes} and
+\citet{li2024svdd}. Because this method edits \emph{every} site, we run it on the complete
+four-site combinatorial GB1 assay (Wu, $149{,}360$ measured combinations
+\citep{wu2016adaptation}), where every sampled combination has a ground-truth function
+score; it is therefore a separate experiment from the pairwise Model~2 ranking task, not a
+head-to-head competitor. After $3$ epochs of reward-weighted fine-tuning, the generated
+library reaches mean function $0.16$ -- above a random library ($0.08$) and the assay-wide
+mean ($0.08$), but well below the unconditioned DPLM library ($1.09$) and far short of the
+top-library ceiling ($2.12$); coverage of measured combinations is $0.974$. On this closed
+assay the reward-guided generator does not clear even the unconditioned-DPLM library: the
+wild-type GB1 interface is already high-function, so an unconditioned protein LM samples
+strong combinations on its own. This reinforces our central finding -- guidance from a
+sequence LM, like the zero-shot reranker, does not by itself capture the specific epistasis
+a representation-trained predictor exposes. All numbers derive from the committed
+\texttt{outputs/epistasis/gen\_design.json}.
+
 \subsection{Cross-protein generalization}
 \label{sec:results-e2e}
 
@@ -674,10 +696,11 @@ explains; we therefore report specific epistasis only as a held-out residual,
 never as in-sample fit.
 Model 1's held-out-position transfer is the hardest regime and is correspondingly
 the weakest we report, though it stays above chance (\cref{sec:results-model12}).
-We do not make a generative design claim and therefore do not benchmark
-against discrete-diffusion guidance \citep{gruver2023protein,nisonoff2025unlocking}
-or reward-guided refinement \citep{wang2025drakes,li2024svdd}; Model 2 is a
-ranking policy over measurable candidates. Finally, all results are
+Model 2 is a ranking policy over measurable candidates, not a generative method;
+we report a discrete-diffusion guidance baseline (\cref{sec:results-gen}) as a
+reference for what reward-guided generation \citep{wang2025drakes,li2024svdd}
+achieves on the same combinatorial assay, but we make no generative design claim of
+our own. Finally, all results are
 \emph{in silico}: no wet-lab validation of designed variants is included.
 
 \section{Conclusion}

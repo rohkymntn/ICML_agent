@@ -162,6 +162,28 @@ exclude 0).
 | Model 1 − zero-shot rerank lift | $+1.31$ | `model2_ci.json:gof_lift_delta_model1_minus_zeroshot` |
 | Model 1 − zero-shot rerank lift 95% CI (excludes 0) | $[1.17, 1.44]$ | `model2_ci.json:gof_lift_delta_ci95` |
 
+## Discrete-diffusion guidance baseline (Section "results-gen", gen_design) — GROUNDED
+
+Source: `outputs/epistasis/gen_design.json` — reward-weighted LoRA fine-tune of DPLM-650M on
+the complete 4-site combinatorial GB1_Wu assay (`modal_app_v2.py::train_generative_design`,
+run ap-fcAdDhVRfLn1J29tdZPVyD, 3 epochs, H100, generated 4,000 multi-mutant samples).
+Guarded by `tests/test_gen_design_committed.py`: structural validity + the internal-consistency
+invariant `top_library_ceiling >= library_mean_overall` are hard-asserted; the directional
+outcome is reported pass-or-skip. The directional guard SKIPS here because the generated
+library does not clear the unconditioned-DPLM library ($0.16 < 1.09$), the honest LOSS case
+the paper reports (sequence-LM guidance does not by itself capture specific epistasis).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Assay (4 sites) | GB1_Wu [265,266,267,280] | `gen_design.json:assay`, `:positions` |
+| Fine-tune epochs | 3 | `gen_design.json:epochs` |
+| Generated library mean function | $0.16$ | `gen_design.json:generated_lib_mean_function` ($0.158$) |
+| Unconditioned DPLM library mean | $1.09$ | `gen_design.json:unconditioned_DPLM_mean` ($1.092$) |
+| Random library mean | $0.08$ | `gen_design.json:random_lib_mean` ($0.079$) |
+| Assay-wide library mean | $0.08$ | `gen_design.json:library_mean_overall` ($0.081$) |
+| Top-library ceiling | $2.12$ | `gen_design.json:top_library_ceiling` ($2.119$) |
+| Library coverage of measured combos | $0.974$ | `gen_design.json:coverage` |
+
 ## Figures
 
 Every committed figure under `paper/figures_epistasis/` is cited in the paper and

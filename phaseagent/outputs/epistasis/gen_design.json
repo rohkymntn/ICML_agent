@@ -1,0 +1,18 @@
+{
+  "assay": "GB1_Wu",
+  "positions": [
+    265,
+    266,
+    267,
+    280
+  ],
+  "epochs": 3,
+  "generated_lib_mean_function": 0.15799913667719673,
+  "generated_NOVEL_lib_mean_function": 0.1421509595760256,
+  "n_novel_generated": 560,
+  "coverage": 0.974,
+  "unconditioned_DPLM_mean": 1.091864776716152,
+  "random_lib_mean": 0.07897922547939705,
+  "top_library_ceiling": 2.118559866672056,
+  "library_mean_overall": 0.08050352897195052
+}
