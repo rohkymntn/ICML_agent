@@ -1,0 +1,10 @@
+{
+  "n_doubles_scored": 15000,
+  "n_proteins": 30,
+  "n_unique_sequences": 20142,
+  "overall_spearman": 0.22572644643888315,
+  "overall_pearson": 0.19258598380423336,
+  "median_per_protein_spearman": 0.25098669467215384,
+  "frac_proteins_pp_spearman_gt_0p2": 0.6,
+  "n_proteins_with_pp_corr": 30
+}

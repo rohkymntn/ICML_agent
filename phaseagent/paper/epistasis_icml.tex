@@ -139,10 +139,10 @@ pairwise interaction by construction.
 Protein language models predict variant effects zero-shot from sequence
 likelihood \citep{meier2021language,wang2024dplm,lin2023esm2}, and recent work
 argues they implicitly encode epistasis. We separate the claim: PLM
-pseudo-likelihood tracks the \emph{global}, stability-coupled component well, but
-its zero-shot epistasis signal on functional assays is near zero
-(\cref{sec:results-decomp}). This motivates a \emph{trained} read-out rather than
-a zero-shot score.
+pseudo-likelihood tracks the \emph{global}, stability-coupled component, but its
+zero-shot epistasis signal is weak even on stability and is expected to be near
+zero on functional assays (\cref{sec:results-zs}). This motivates a \emph{trained}
+read-out rather than a zero-shot score.
 
 \paragraph{Assay-labeled models.}
 Combining PLM representations with assay labels improves fitness prediction
@@ -347,16 +347,40 @@ are listed in \cref{tab:decomp}.
 \label{sec:results-zs}
 
 The stability result above is the setting where zero-shot PLMs do best, because
-naturalness is coupled to stability. The functional assays are the opposite
-regime. We will report, on GB1 binding and GFP fluorescence, the rank correlation
-between zero-shot DPLM PLL epistasis (\cref{eq:zs}) and measured specific
-epistasis -- the floor that any learned model must beat -- and contrast it with
-the much higher stability correlation, establishing that zero-shot PLM epistasis
-is a stability signal that does not transfer to function. These functional
-numbers are produced by the GPU feature-extraction and scoring pipeline and are
-folded in from their committed artifacts under \texttt{outputs/epistasis/} as each
-run completes; the present draft reports the committed stability decomposition in
-full (\cref{tab:decomp}).
+naturalness is coupled to stability. Even there, the zero-shot DPLM PLL epistasis
+score (\cref{eq:zs}) is only a weak predictor of measured specific epistasis: over
+30 Megascale domains (15{,}000 double mutants), its median per-protein Spearman
+with the specific-epistasis residual is $0.25$ (overall Spearman $0.23$), and it
+clears $\spearman > 0.2$ for only 60\% of proteins (\cref{tab:zeroshot}). This is
+the ceiling for a label-free PLM epistasis score, and it is already modest in the
+most favorable regime; the functional assays are the opposite regime. We will
+report, on GB1 binding and GFP fluorescence, the same zero-shot DPLM PLL
+correlation against measured specific epistasis -- the floor that any learned
+model must beat -- establishing that zero-shot PLM epistasis is a stability-coupled
+signal that does not transfer to function. Those functional numbers are produced
+by the GPU feature-extraction and scoring pipeline and fold in from their committed
+artifacts under \texttt{outputs/epistasis/} as each scoring run completes.
+
+\begin{table}[t]
+  \centering
+  \caption{Zero-shot DPLM pseudo-log-likelihood epistasis (\cref{eq:zs}) vs.\
+  measured specific epistasis on Megascale stability doubles -- the regime most
+  favorable to a label-free PLM score, where naturalness and the assay are most
+  coupled. Even here the zero-shot score is weak. Source:
+  \texttt{outputs/epistasis/headroom\_summary.json}.}
+  \label{tab:zeroshot}
+  \small
+  \begin{tabular}{lr}
+    \toprule
+    Quantity & Value \\
+    \midrule
+    Proteins / doubles scored & 30 / 15{,}000 \\
+    Median per-protein Spearman & $0.25$ \\
+    Overall Spearman & $0.23$ \\
+    Proteins with per-protein $\spearman > 0.2$ & 60\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \subsection{Model 1 and Model 2}
 \label{sec:results-model12}

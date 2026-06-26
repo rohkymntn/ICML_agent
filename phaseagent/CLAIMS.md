@@ -23,6 +23,22 @@ Source: `outputs/epistasis/decomposition_summary.json` (derived from the committ
 | Proteins with specific share > 10% | 98% | `decomposition_summary.json:frac_proteins_spec_var_share_gt_0p1` |
 | Proteins with specific std > 0.3 kcal/mol | 85% | `decomposition_summary.json:frac_proteins_spec_std_gt_0p3` |
 
+## Zero-shot DPLM PLL baseline, STABILITY (Section 7.2 / Table "zeroshot") — GROUNDED
+
+Source: `outputs/epistasis/headroom_summary.json` (per-double zero-shot DPLM PLL
+epistasis `LL(dd)-LL(s1)-LL(s2)+LL(wt)` vs the measured specific-epistasis residual
+on Megascale STABILITY doubles, run `ap-a7hQxHVfIOYVuoil7e6Go7`). Per-double values
+in `outputs/epistasis/headroom_dplm.parquet` (columns `eps_specific`,
+`dplm_epistasis`); the summary's per-protein stats reproduce from the parquet.
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Proteins scored | 30 | `headroom_summary.json:n_proteins` |
+| Doubles scored | 15,000 | `headroom_summary.json:n_doubles_scored` |
+| Median per-protein Spearman | $0.25$ | `headroom_summary.json:median_per_protein_spearman` |
+| Overall Spearman | $0.23$ | `headroom_summary.json:overall_spearman` |
+| Proteins with per-protein $\rho>0.2$ | 60% | `headroom_summary.json:frac_proteins_pp_spearman_gt_0p2` |
+
 ## Figures
 
 | Figure | File | Regen script | Committed data source |
@@ -36,8 +52,7 @@ These numbers from `HANDOFF_EPISTASIS_2026.md` are NOT yet committed as artifact
 under `outputs/epistasis/` and therefore do NOT appear as numbers in the paper.
 They are folded in (with a row above) only when their artifact is committed.
 
-- Zero-shot DPLM PLL epistasis Spearman, STABILITY (Megascale doubles): **RUNNING** — `run_headroom_gate` (`ap-a7hQxHVfIOYVuoil7e6Go7`); will commit `outputs/epistasis/headroom_summary.json` (keys `overall_spearman`, `median_per_protein_spearman`, `frac_proteins_pp_spearman_gt_0p2`) + `headroom_dplm.parquet`. Folds into §7.2 (stability side of the zero-shot contrast) when committed.
-- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): pending the function feature/scoring pipeline (`extract_function_features` / function PLL scoring) — needs committed scoring CSV.
+- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): pending the function feature/scoring pipeline (`extract_function_features` / function PLL scoring) — needs committed scoring CSV. This is the other half of the §7.2 contrast (function side, expected near zero); the stability side is now committed (table above).
 - Model 1 held-out doubles / held-out positions Spearman (GB1, GFP) — needs committed `train_model1.py` output.
 - Model 2 gain-of-function recovery + matched-additive within-bin Spearman — needs committed `model2_design.py` output.
 - e2e cross-protein median held-out-protein Spearman — needs committed `outputs/epistasis/e2e_results.json` (run `ap-ayiJz1iYjfF0M5qUt0Rhaj`).
