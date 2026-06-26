@@ -155,6 +155,22 @@ Combining PLM representations with assay labels improves fitness prediction
 rather than raw fitness, which makes the target a clean test of interaction
 modeling and removes the additive and global components that PLMs already explain.
 
+\paragraph{Coevolution and direct-coupling models.}
+A long line infers pairwise residue couplings from evolutionary sequence
+covariation: Potts / direct-coupling models recover structural contacts
+\citep{morcos2011direct} and predict mutation effects in an epistasis-aware,
+unsupervised way \citep{hopf2017mutation}, and combinatorial deep mutational
+scans confirm that specific, often sparse, higher-order epistasis genuinely
+shapes function \citep{poelwijk2019learning}. These couplings are estimated from
+cross-species alignment covariation and capture an average, evolutionarily and
+structurally constrained interaction. Our target is different: the
+assay-specific functional epistasis residual of a \emph{single} protein's
+measured combinations after the additive and global layers are removed
+(\cref{sec:decomp}), a quantity that family covariation does not directly
+isolate. We therefore treat coevolutionary couplings as related context rather
+than a matched baseline, and read specific epistasis out of one protein's
+learned representation instead.
+
 \paragraph{Generative and guided protein design.}
 A parallel line designs sequences \emph{generatively}, steering a diffusion or
 flow model toward a reward: classifier-style guidance for discrete state spaces
