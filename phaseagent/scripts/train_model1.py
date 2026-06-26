@@ -15,8 +15,11 @@ Eval = proof: held-out DOUBLES (unseen pair label) and held-out POSITIONS
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.model_selection import GroupKFold, KFold
 
@@ -110,27 +113,71 @@ def load(feat, shift=None):
     return F_, y, pll, pos, Hi.shape[1], use_shift
 
 
+def summarize(df, assay, dim, use_shift):
+    """Derive the paper's Model 1 numbers from the raw out-of-fold CSV.
+
+    Keeping the summary a pure function of the committed OOF table means a test
+    can recompute it and catch any csv/summary drift (the headroom pattern)."""
+    y = df["y_true"].to_numpy()
+    pll = df["pll"].to_numpy()
+    rho = lambda a: float(spearmanr(y, a).statistic)
+    zs = rho(pll)
+    d, p = rho(df["oof_doubles"].to_numpy()), rho(df["oof_position"].to_numpy())
+    return {
+        "assay": assay, "n_doubles": int(len(df)), "dim": int(dim),
+        "use_shift": bool(use_shift),
+        "zeroshot_spearman": zs,
+        "model1_doubles_spearman": d, "model1_position_spearman": p,
+        "delta_doubles": d - zs, "delta_position": p - zs,
+    }
+
+
+def run_model1(feat, assay, out="outputs/epistasis", shift=None, epochs=200):
+    """Train Model 1, write the committed DoD #3 artifacts, return the summary.
+
+    Writes `model1_oof_<assay>.csv` (raw out-of-fold predictions for both the
+    held-out-DOUBLES and held-out-POSITION splits, the traceable artifact) and
+    `model1_<assay>_summary.json` (the numbers the paper / CLAIMS.md cite,
+    derived from that CSV)."""
+    F_, y, pll, pos, D, use_shift = load(feat, shift)
+
+    def oof_for(splits):
+        oof = np.full(len(y), np.nan)
+        for tr, te in splits:
+            oof[te] = train_fold(F_, y, tr, te, D, use_shift=use_shift, epochs=epochs)
+        return oof
+
+    oof_d = oof_for(list(KFold(5, shuffle=True, random_state=0).split(y)))
+    oof_p = oof_for(list(GroupKFold(5).split(y, groups=pos[:, 0])))
+    df = pd.DataFrame({
+        "y_true": y, "pll": pll, "oof_doubles": oof_d, "oof_position": oof_p,
+        "pos_i": pos[:, 0], "pos_j": pos[:, 1],
+    })
+    outdir = Path(out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(outdir / f"model1_oof_{assay}.csv", index=False)
+    summ = summarize(df, assay, D, use_shift)
+    (outdir / f"model1_{assay}_summary.json").write_text(json.dumps(summ, indent=2))
+    return summ
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--feat", required=True)
     ap.add_argument("--shift", default=None)
+    ap.add_argument("--assay", required=True)
+    ap.add_argument("--out", default="outputs/epistasis")
     ap.add_argument("--epochs", type=int, default=200)
     args = ap.parse_args()
-    F_, y, pll, pos, D, use_shift = load(args.feat, args.shift)
-    tag = "DPLM + representation-shifts" if use_shift else "DPLM hidden states"
-    print(f"[model1] {len(y)} doubles, dim={D}, features = {tag}")
-    print(f"[model1] zero-shot PLL Spearman: {spearmanr(y, pll).statistic:.3f}")
-
-    def run(splits, label):
-        oof = np.full(len(y), np.nan)
-        for tr, te in splits:
-            oof[te] = train_fold(F_, y, tr, te, D, use_shift=use_shift, epochs=args.epochs)
-        m1, zs = spearmanr(y, oof).statistic, spearmanr(y, pll).statistic
-        print(f"[{label}] Model 1={m1:.3f}  zero-shot={zs:.3f}  "
-              f"{'WIN +' + format(m1 - zs, '.3f') if m1 > zs else 'lose'}")
-
-    run(list(KFold(5, shuffle=True, random_state=0).split(y)), "held-out DOUBLES ")
-    run(list(GroupKFold(5).split(y, groups=pos[:, 0])), "held-out POSITION")
+    s = run_model1(args.feat, args.assay, out=args.out, shift=args.shift, epochs=args.epochs)
+    tag = "DPLM + representation-shifts" if s["use_shift"] else "DPLM hidden states"
+    print(f"[model1] {s['n_doubles']} doubles, dim={s['dim']}, features = {tag}")
+    print(f"[model1] zero-shot PLL Spearman: {s['zeroshot_spearman']:.3f}")
+    for split, m, dl in [("held-out DOUBLES ", s["model1_doubles_spearman"], s["delta_doubles"]),
+                         ("held-out POSITION", s["model1_position_spearman"], s["delta_position"])]:
+        print(f"[{split}] Model 1={m:.3f}  zero-shot={s['zeroshot_spearman']:.3f}  "
+              f"{'WIN +' + format(dl, '.3f') if dl > 0 else 'lose'}")
+    print(f"[model1] wrote outputs to {args.out}/model1_{args.assay}_*")
 
 
 if __name__ == "__main__":
