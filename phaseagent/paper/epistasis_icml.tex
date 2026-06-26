@@ -65,7 +65,8 @@ predicted epistasis recovers gain-of-function combinations that the additive
 model structurally cannot find. Fine-tuning DPLM end-to-end with LoRA across the 149 Megascale stability
 domains shows the same epistasis-prediction skill transfers across proteins:
 on 25 held-out domains that contribute no training examples it reaches a median
-Spearman of $0.33$, above the $0.25$ zero-shot reference. All claims are backed
+Spearman of $0.33$, above the $0.25$ zero-shot DPLM pseudo-likelihood reference on
+the same stability task. All claims are backed
 by held-out evaluations on real deep-mutational-scanning data.
 \end{abstract}
 
@@ -120,8 +121,8 @@ Our contributions are:
   the part of the signal the additive model cannot see.
   \item \textbf{Cross-protein generalization} (\cref{sec:e2e}): an end-to-end
   LoRA fine-tune of DPLM that transfers learned epistasis to 25 held-out
-  Megascale stability domains (median Spearman $0.33$, above the $0.25$ zero-shot
-  reference), showing the skill is not memorized per protein. This cross-protein
+  Megascale stability domains (median Spearman $0.33$, above the $0.25$ corpus-level
+  zero-shot DPLM PLL reference), showing the skill is not memorized per protein. This cross-protein
   test runs on the stability corpus because it is the only corpus here with
   enough proteins for a held-out-\emph{protein} split.
 \end{itemize}
@@ -580,21 +581,32 @@ contribute no training examples. With rank-64 adapters (12.9M trainable
 parameters) and 10 epochs, it reaches a median per-held-out-protein Spearman of
 $0.33$ (mean $0.33$) between predicted and measured specific epistasis, clearing
 $\spearman > 0.2$ for 80\% of held-out domains (\cref{tab:e2e}). This exceeds the
-zero-shot DPLM PLL reference of $0.25$ on the same residual target
-(\cref{sec:results-zs}) \emph{on proteins the head never saw}: the epistasis skill
-learned across proteins transfers to new ones, rather than being memorized per
-protein. The transfer is demonstrated on stability because that is the only corpus
-with enough proteins for a held-out-protein split; transferring the
-\emph{functional} skill across proteins is the analogous open problem
-(\cref{sec:limitations}). All numbers are read from the committed
-\texttt{outputs/epistasis/e2e\_results.json}.
+zero-shot DPLM PLL reference of $0.25$ -- the median per-protein Spearman of the
+label-free score on the Megascale stability corpus (\cref{sec:results-zs},
+\cref{tab:zeroshot}), the same specific-epistasis target and metric. The learned
+$0.33$ is achieved \emph{on 25 proteins the head never saw}: the epistasis skill
+learned across proteins transfers to new ones rather than being memorized per
+protein. The $0.25$ is the corpus-level zero-shot ceiling for this regime, not a
+zero-shot score re-measured on these exact held-out domains; because the zero-shot
+baseline uses no training data, train/test overlap does not affect it, and a
+per-held-out-protein zero-shot control would only sharpen the comparison -- we leave
+it to future work (\cref{sec:limitations}). The transfer is demonstrated on
+stability because that is the only corpus with enough proteins for a
+held-out-protein split; transferring the \emph{functional} skill across proteins is
+the analogous open problem (\cref{sec:limitations}). The $0.33$, mean, and $80\%$
+numbers are read from the committed \texttt{outputs/epistasis/e2e\_results.json}; the
+$0.25$ reference is the committed headroom baseline
+(\texttt{outputs/epistasis/headroom\_summary.json}).
 
 \begin{table}[t]
   \centering
   \caption{Cross-protein generalization of the end-to-end LoRA fine-tune,
   evaluated on the 25 held-out Megascale proteins (no training examples).
-  Reference is the zero-shot DPLM PLL median per-protein Spearman on the same
-  specific-epistasis residual. Source: \texttt{outputs/epistasis/e2e\_results.json}.}
+  The reference is the zero-shot DPLM PLL median per-protein Spearman on the
+  Megascale stability corpus (\cref{tab:zeroshot}) -- the same specific-epistasis
+  target and metric, a corpus-level ceiling, not re-measured on these 25 held-out
+  domains. Source: \texttt{outputs/epistasis/e2e\_results.json}; the zero-shot
+  reference is \texttt{outputs/epistasis/headroom\_summary.json}.}
   \label{tab:e2e}
   \begin{tabular}{lc}
     \toprule

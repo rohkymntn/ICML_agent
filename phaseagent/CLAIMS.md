@@ -119,7 +119,7 @@ and evaluated on the 25 held-out proteins that contribute no training examples; 
 | Median per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_median_spearman` |
 | Mean per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_mean_spearman` |
 | Fraction of held-out proteins with $\rho>0.2$ | 0.80 | `e2e_results.json:frac_heldout_prot_gt_0p2` |
-| Zero-shot DPLM PLL reference | $0.25$ | `e2e_results.json:zero_shot_reference` |
+| Zero-shot DPLM PLL reference (corpus-level, §7.2) | $0.25$ | `headroom_summary.json:median_per_protein_spearman` (0.250987 → 0.25, the real measured zero-shot ceiling on 30 Megascale stability domains; **the paper traces the 0.25 to this measured artifact, NOT** to `e2e_results.json:zero_shot_reference`, which is a hardcoded literal `0.25` in `train_epistasis_e2e` that merely coincides with it). This is a corpus-level zero-shot ceiling on the same specific-epistasis target/metric/regime, **not** a per-test-protein zero-shot control re-measured on the exact 25 held-out domains (left as future work, §limitations). |
 
 ## Model 2 design + best-of-N rerank baseline (Section 7.4 / Table "model2", Fig "model2") — GROUNDED
 
