@@ -154,6 +154,19 @@ Combining PLM representations with assay labels improves fitness prediction
 rather than raw fitness, which makes the target a clean test of interaction
 modeling and removes the additive and global components that PLMs already explain.
 
+\paragraph{Generative and guided protein design.}
+A parallel line designs sequences \emph{generatively}, steering a diffusion or
+flow model toward a reward: classifier-style guidance for discrete state spaces
+\citep{gruver2023protein,nisonoff2025unlocking}, reward fine-tuning of discrete
+diffusion models \citep{wang2025drakes}, and derivative-free value-based decoding
+\citep{li2024svdd}. These methods \emph{propose} new variants and are scored by a
+(often learned or in-silico) reward. Our Model 2 is deliberately not generative:
+it is a ranking policy over a pool of \emph{already measured} combinations, so
+every selected design carries a ground-truth label and no reward model can be
+gamed. We therefore treat guided generation as related context rather than a
+matched baseline for the ranking claim, and benchmark the best-of-$N$ reranking
+reduction that does apply to a closed measured pool (\cref{sec:results-model2}).
+
 \paragraph{Datasets.}
 We use the Megascale stability corpus \citep{tsuboyama2023mega} for the
 stability decomposition and ProteinGym \citep{notin2023proteingym} functional
@@ -270,10 +283,11 @@ specific-epistasis residual defined in \cref{sec:decomp}.
 epistasis claim. (ii) \emph{Zero-shot DPLM PLL}: \cref{eq:zs}, the pretrained-PLM
 epistasis score with no task labels. (iii) For design, \emph{best-of-$N$
 reranking} of randomly drawn candidates and an additive-ranking control. Stronger
-generative comparators (discrete-diffusion guidance and reward-guided refinement)
-are required only if a generative design claim is made; our Model 2 is a ranking
-policy over measurable candidates, so the additive and best-of-$N$ controls are
-the matched baselines.
+generative comparators -- discrete-diffusion guidance
+\citep{gruver2023protein,nisonoff2025unlocking} and reward-guided refinement
+\citep{wang2025drakes,li2024svdd} -- are required only if a generative design claim
+is made; our Model 2 is a ranking policy over measurable candidates, so the
+additive and best-of-$N$ controls are the matched baselines.
 
 \paragraph{Metrics.}
 Variance explained ($R^2$) for the decomposition; Spearman rank correlation
@@ -576,7 +590,8 @@ explains; we therefore report specific epistasis only as a held-out residual,
 never as in-sample fit.
 Model 1's held-out-position transfer is the hardest regime and is expected to be
 weak. We do not make a generative design claim and therefore do not benchmark
-against discrete-diffusion guidance or reward-guided refinement; Model 2 is a
+against discrete-diffusion guidance \citep{gruver2023protein,nisonoff2025unlocking}
+or reward-guided refinement \citep{wang2025drakes,li2024svdd}; Model 2 is a
 ranking policy over measurable candidates. Finally, all results are
 \emph{in silico}: no wet-lab validation of designed variants is included.
 
