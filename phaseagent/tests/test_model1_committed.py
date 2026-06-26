@@ -49,6 +49,32 @@ def test_committed_summary_reproduces_from_oof_csv():
         pytest.skip("Model 1 artifacts not yet committed (training run pending)")
 
 
+# (decimals, expected) pinned to paper section 7.2 / 7.3 tab:model1 / CLAIMS.md
+PAPER = {
+    "GB1_Olson": {"zeroshot_spearman": (3, 0.021), "model1_doubles_spearman": (2, 0.36),
+                  "model1_position_spearman": (2, 0.12), "delta_doubles": (2, 0.34)},
+    "GFP": {"zeroshot_spearman": (3, 0.005), "model1_doubles_spearman": (2, 0.14),
+            "model1_position_spearman": (2, 0.08), "delta_doubles": (2, 0.13)},
+}
+
+
+def test_summary_matches_paper_numbers():
+    """Pin the exact rounded values in tab:model1 so a regenerated+recommitted
+    summary cannot silently desync the paper (the no-drift test would still pass)."""
+    seen = False
+    for assay, want in PAPER.items():
+        paths = _committed(assay)
+        if paths is None:
+            continue
+        seen = True
+        _, js = paths
+        s = json.loads(js.read_text())
+        for k, (nd, val) in want.items():
+            assert round(s[k], nd) == val, f"{assay} {k}: {s[k]} != paper {val}"
+    if not seen:
+        pytest.skip("Model 1 artifacts not yet committed (training run pending)")
+
+
 def test_model1_beats_zeroshot_on_function():
     """The paper's claim: learned Model 1 beats the (near-zero) zero-shot floor on
     held-out doubles for both functional assays."""

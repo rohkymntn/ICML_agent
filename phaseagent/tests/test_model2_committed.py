@@ -78,3 +78,24 @@ def test_committed_model2_reproduces_and_backs_claim():
     # ranking by predicted epistasis lifts measured binding over the pool.
     assert s["matched_additive_spearman"] > 0
     assert s["gof_lift_model1"] > 0
+
+
+def test_committed_model2_matches_paper_numbers():
+    """Pin the exact rounded values in tab:model2 / CLAIMS.md so a regenerated +
+    recommitted summary cannot silently desync the paper (no-drift would pass)."""
+    paths = _committed()
+    if paths is None:
+        pytest.skip("Model 2 artifacts not yet committed (design run pending)")
+    _, js = paths
+    s = json.loads(js.read_text())
+    assert round(s["pool_mean_binding"], 2) == -3.62
+    assert round(s["gof_top10pct_model1"], 2) == -2.53
+    assert round(s["gof_top10pct_zeroshot"], 2) == -3.84
+    assert round(s["gof_top10pct_oracle"], 2) == -2.00
+    assert round(s["gof_lift_model1"], 2) == 1.09
+    assert round(s["gof_lift_zeroshot"], 2) == -0.22
+    assert round(s["matched_additive_spearman"], 2) == 0.28
+    assert s["n_matched_bins"] == 10
+    # oracle lift is derived (no stored key) exactly as CLAIMS.md documents it;
+    # round(top-pool) = 1.61, NOT the double-rounded -2.00-(-3.62)=1.62.
+    assert round(s["gof_top10pct_oracle"] - s["pool_mean_binding"], 2) == 1.61

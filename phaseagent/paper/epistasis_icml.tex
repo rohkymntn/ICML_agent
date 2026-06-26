@@ -550,7 +550,7 @@ each reward. Measured binding is the ProteinGym DMS score for the Olson GB1
 assay -- a dimensionless log-scale binding-enrichment value -- so the lifts
 below are on that log scale. Ranking by Model 1's predicted specific epistasis
 lifts the mean measured binding of the selection by $+1.09$ over the pool,
-recovering most of the $+1.62$ oracle lift available to a perfect epistasis ranker
+recovering most of the $+1.61$ oracle lift available to a perfect epistasis ranker
 (\cref{tab:model2}). The standard PLM-as-reward design baseline -- best-of-$N$
 reranking by the zero-shot DPLM PLL epistasis -- does \emph{worse than random
 selection} from the pool ($-0.22$ lift), because that score is essentially blind
@@ -588,7 +588,7 @@ the committed \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
     Additive (pool mean) & $-3.62$ & $0.00$ \\
     Best-of-$N$ (zero-shot DPLM PLL) & $-3.84$ & $-0.22$ \\
     Model 1 (predicted epistasis) & $-2.53$ & $+1.09$ \\
-    Oracle (true epistasis) & $-2.00$ & $+1.62$ \\
+    Oracle (true epistasis) & $-2.00$ & $+1.61$ \\
     \bottomrule
   \end{tabular}
 \end{table}

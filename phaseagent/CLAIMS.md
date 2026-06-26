@@ -140,7 +140,7 @@ lift and matched-additive Spearman are positive).
 | Oracle top-10% binding | $-2.00$ | `model2_GB1_summary.json:gof_top10pct_oracle` |
 | Model 1 lift over additive pool | $+1.09$ | `model2_GB1_summary.json:gof_lift_model1` |
 | Best-of-$N$ rerank lift over additive pool | $-0.22$ | `model2_GB1_summary.json:gof_lift_zeroshot` |
-| Oracle lift over additive pool | $+1.62$ | `gof_top10pct_oracle` − `pool_mean_binding` |
+| Oracle lift over additive pool | $+1.61$ | `gof_top10pct_oracle` − `pool_mean_binding` (= $1.614$, rounds to $1.61$; the table's $-2.00,-3.62$ means differ by $1.62$ only via double-rounding) |
 | Matched-additive within-bin Spearman | $0.28$ | `model2_GB1_summary.json:matched_additive_spearman` |
 | Matched-additive bins | 10 | `model2_GB1_summary.json:n_matched_bins` |
 

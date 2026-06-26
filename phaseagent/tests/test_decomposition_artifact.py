@@ -31,6 +31,22 @@ def test_summary_matches_committed_atlas():
     assert s["frac_proteins_spec_var_share_gt_0p1"] > 0.9
 
 
+def test_summary_matches_paper_numbers():
+    """The rounded values printed in the abstract / section 7.1 / CLAIMS.md.
+
+    Pins the exact figures the paper shows so that regenerating + recommitting a
+    drifted atlas (which the no-drift test would still pass) cannot silently
+    desync the abstract from the artifact."""
+    s = json.loads(SUMMARY.read_text())
+    assert s["n_proteins"] == 149
+    assert s["total_double_mutants"] == 131062
+    assert round(s["median_r2_additive"], 2) == -0.91
+    assert round(s["median_r2_global"], 2) == 0.72
+    assert round(s["median_spec_std_kcal"], 2) == 0.42
+    assert round(s["frac_proteins_additive_r2_negative"], 2) == 0.72
+    assert round(s["frac_proteins_spec_var_share_gt_0p1"], 2) == 0.98
+
+
 def test_committed_summary_in_sync():
     """The committed JSON must equal a fresh recompute (no stale numbers)."""
     from scripts.build_decomposition_artifact import summarize
