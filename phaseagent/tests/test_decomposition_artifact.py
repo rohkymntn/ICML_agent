@@ -43,7 +43,9 @@ def test_summary_matches_paper_numbers():
     assert round(s["median_r2_additive"], 2) == -0.91
     assert round(s["median_r2_global"], 2) == 0.72
     assert round(s["median_spec_std_kcal"], 2) == 0.42
+    assert round(s["median_spec_var_share"], 2) == 0.28  # tab:decomp + sec 7.1 "median share 28%"
     assert round(s["frac_proteins_additive_r2_negative"], 2) == 0.72
+    assert round(s["frac_proteins_spec_std_gt_0p3"], 2) == 0.85  # sec 7.1 "exceeds 0.3 kcal/mol for 85%"
     assert round(s["frac_proteins_spec_var_share_gt_0p1"], 2) == 0.98
 
 
