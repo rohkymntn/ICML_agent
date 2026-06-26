@@ -495,7 +495,10 @@ bootstrap puts these at $0.12$ (95\% CI $[0.10, 0.14]$) and $0.08$
 significantly above chance. Because
 the head consumes only DPLM hidden states and representation shifts, never residue
 indices, the recovered signal is genuinely carried in the representation rather
-than memorized from position identity. Both rows are derived from the committed
+than memorized from position identity. That a held-out predictor recovers this
+residual at all -- with bootstrap intervals excluding zero -- is itself evidence
+that functional specific epistasis is real signal and not measurement scatter,
+since noise cannot be predicted out of fold. Both rows are derived from the committed
 out-of-fold predictions in \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,GFP\}.csv}.
 
 \begin{table}[t]
