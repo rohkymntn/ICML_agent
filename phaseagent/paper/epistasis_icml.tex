@@ -264,10 +264,10 @@ baseline). (ii) The \emph{matched-additive control}: within narrow bins of
 additive prediction (so additive value is held fixed), the rank correlation
 between predicted and measured specific epistasis. A positive within-bin
 correlation is, by construction, signal that the additive model cannot access.
-Code: \texttt{scripts/model2\_design.py}. Because every generated GB1 combination
-is measurable in the complete combinatorial assay
-\citep{olson2014comprehensive,wu2016adaptation}, this is a closed evaluation: no
-selected design is unscored.
+Code: \texttt{scripts/model2\_design.py}. Because every candidate GB1 double
+mutant is measured in the complete pairwise assay
+\citep{olson2014comprehensive}, this is a closed evaluation: no selected design
+is unscored (Model 2 ranks measured candidates rather than generating new ones).
 
 \section{Cross-protein generalization: end-to-end LoRA fine-tune}
 \label{sec:e2e}
