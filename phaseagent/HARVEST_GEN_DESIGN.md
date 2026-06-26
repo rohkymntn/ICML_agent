@@ -12,16 +12,19 @@ The 11 keys are: `assay, positions, epochs, generated_lib_mean_function,
 generated_NOVEL_lib_mean_function, n_novel_generated, coverage, unconditioned_DPLM_mean,
 random_lib_mean, top_library_ceiling, library_mean_overall`.
 
-**Patch currency — re-verified iter48 against the live paper** (the paper was edited
+**Patch currency — re-verified iter49 against the live paper** (the paper was edited
 after this patch was written, e.g. iter40's §5 rewrite, iter47's §9-limitations prose
-fix, and iter48's §7.3 "noise cannot be predicted out of fold" sentence, so the
+fix, iter48's §7.3 "noise cannot be predicted out of fold" sentence, and iter49's §7
+implementation-details fix that spells out the head concatenates the two projections
+$\text{proj}(H_i),\text{proj}(H_j)$ alongside their bilinear product, so the
 match-strings were re-checked): the Step-2 §7 replace-block matches lines
-304--309 verbatim (unchanged by iter48, which edited §7.3 *below* the §Experiments
-Baselines paragraph), the Step-3 §9 replace-block matches lines 674--677 verbatim (the
-`We do not make a generative design claim...` block shifted +3 lines in iter48 when the
-§7.3 real-not-noise sentence was added; the replace-block text itself is
-unchanged), and the Step-1 anchor `\subsection{Cross-protein generalization}` is at line 608
-(its preceding `\end{figure}` at line 606). Required macros are
+304--309 verbatim (unchanged by iter49, which edited the §Implementation-details
+paragraph *below* the §Experiments Baselines paragraph), the Step-3 §9 replace-block
+matches lines 675--678 verbatim (the `We do not make a generative design claim...`
+block shifted +1 line in iter49 when the §7 implementation-details sentence grew by
+one wrapped line; the replace-block text itself is
+unchanged), and the Step-1 anchor `\subsection{Cross-protein generalization}` is at line 609
+(its preceding `\end{figure}` at line 607). Required macros are
 loaded: `natbib` (line 97 of `icml2025.sty`) provides `\citet`, and `cleveref` (line 19 of the
 `.tex`) provides `\cref`. So the patch still applies cleanly; re-run this currency check if the
 paper is edited again before the artifact lands.
@@ -64,8 +67,8 @@ generator concentrated on the highest-function combinations"). Drop the `\citep`
 artifact does not support; the guard already keeps the tree green without edits.
 
 ## Step 1 — new results subsection
-Insert AFTER `\end{figure}` of `tab:model2`/`fig:model2` (current line 606, i.e. right
-before `\subsection{Cross-protein generalization}` at line 608) in `paper/epistasis_icml.tex`:
+Insert AFTER `\end{figure}` of `tab:model2`/`fig:model2` (current line 607, i.e. right
+before `\subsection{Cross-protein generalization}` at line 609) in `paper/epistasis_icml.tex`:
 
 ```latex
 \subsection{A discrete-diffusion guidance baseline}
@@ -159,7 +162,7 @@ candidates, so for the ranking claim the additive and best-of-$N$ controls remai
 the matched baselines.
 ```
 
-## Step 3 — RECONCILE §9-limitations (REQUIRED; currently lines 674-677)
+## Step 3 — RECONCILE §9-limitations (REQUIRED; currently lines 675-678)
 Replace:
 ```latex
 We do not make a generative design claim and therefore do not benchmark

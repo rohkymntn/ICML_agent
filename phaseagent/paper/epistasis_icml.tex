@@ -316,10 +316,11 @@ and within-additive-bin Spearman for Model 2.
 
 \paragraph{Implementation details.}
 Model 1's coupling head projects each mutated-position DPLM-650M hidden state
-($d=1280$) to $128$ dimensions, forms the bilinear product
-$\text{proj}(H_i)\odot\text{proj}(H_j)$, and concatenates $16$-dimensional
-embeddings of the four amino-acid identities (wild-type and mutant at both sites)
-with the $z$-scored zero-shot PLL feature; a LayerNorm followed by a
+($d=1280$) to $128$ dimensions through a GELU, then concatenates the two
+projections $\text{proj}(H_i),\text{proj}(H_j)$, their bilinear product
+$\text{proj}(H_i)\odot\text{proj}(H_j)$, $16$-dimensional embeddings of the four
+amino-acid identities (wild-type and mutant at both sites), and the $z$-scored
+zero-shot PLL feature; a LayerNorm followed by a
 two-hidden-layer MLP ($256$ then $128$ units, GELU, dropout $0.3$) regresses the
 specific-epistasis residual, with a learnable scalar gain on the PLL term as a
 residual base. The held-out-position variant additionally consumes the
