@@ -393,6 +393,7 @@ a $28\%$ ($[26\%, 33\%]$) variance share. Source:
   \texttt{outputs/epistasis/decomposition\_summary.json}.}
   \label{tab:decomp}
   \small
+  \setlength{\tabcolsep}{4pt}
   \begin{tabular}{lr}
     \toprule
     Quantity & Value \\
@@ -426,7 +427,7 @@ Spearman $0.021$ on GB1 and $0.005$ on GFP (\cref{tab:model1}, ``zero-shot''
 column). Zero-shot PLM epistasis is therefore a stability-coupled signal that does
 \emph{not} transfer to function -- it is, on these functional assays, no better
 than chance. These two numbers are the
-\texttt{model1\_\{GB1\_Olson,GFP\}\_summary.json:zeroshot\_spearman} keys, and they
+\texttt{model1\_*\_summary.json:zeroshot\_spearman} keys, and they
 are the floor any learned model must beat.
 
 \begin{table}[t]
@@ -501,9 +502,12 @@ out-of-fold predictions in \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,G
   \texttt{model1\_*\_summary.json}.}
   \label{tab:model1}
   \small
+  \setlength{\tabcolsep}{5pt}
   \begin{tabular}{lccc}
     \toprule
-    Assay & Zero-shot & Model 1 (Doubles) & Model 1 (Position) \\
+    & & \multicolumn{2}{c}{Model 1} \\
+    \cmidrule(lr){3-4}
+    Assay & Zero-shot & Doubles & Position \\
     \midrule
     GB1 (Olson) & $0.021$ & $0.36$ & $0.12$ \\
     GFP (Sarkisyan) & $0.005$ & $0.14$ & $0.08$ \\
@@ -564,12 +568,13 @@ the committed \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
   \texttt{model2\_GB1\_summary.json}.}
   \label{tab:model2}
   \small
+  \setlength{\tabcolsep}{5pt}
   \begin{tabular}{lcc}
     \toprule
-    Selection rule & Top-10\% binding & Lift \\
+    Selection rule & Top-10\% & Lift \\
     \midrule
     Additive (pool mean) & $-3.62$ & $0.00$ \\
-    Best-of-$N$ rerank (zero-shot DPLM PLL) & $-3.84$ & $-0.22$ \\
+    Best-of-$N$ (zero-shot DPLM PLL) & $-3.84$ & $-0.22$ \\
     Model 1 (predicted epistasis) & $-2.53$ & $+1.09$ \\
     Oracle (true epistasis) & $-2.00$ & $+1.62$ \\
     \bottomrule
