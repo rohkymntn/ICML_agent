@@ -3113,15 +3113,17 @@ def train_epistasis_e2e(
     return summary
 
 
-@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 8)
+@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="H100", timeout=3600 * 8)
 def train_generative_design(
     assay_csv: str = "raw/proteingym_v1_3/DMS_ProteinGym_substitutions/SPG1_STRSG_Wu_2016.csv",
     assay_name: str = "GB1_Wu",
-    epochs: int = 5,
-    lr: float = 1e-4,
+    epochs: int = 3,
+    lr: float = 2e-4,
     lora_r: int = 16,
     batch_size: int = 32,
-    n_samples: int = 4000,
+    n_samples: int = 3000,
+    max_train: int = 30000,
+    top_frac: float = 0.2,
     out: str = "outputs/epistasis/gen_design.json",
     seed: int = 0,
 ) -> dict:
@@ -3173,9 +3175,16 @@ def train_generative_design(
     idx = rng.permutation(len(d))
     cut = int(0.85 * len(d))
     tr = d.iloc[idx[:cut]].reset_index(drop=True)
+    if top_frac < 1.0:  # learn the FUNCTIONAL region, not the deleterious bulk (the fix)
+        tr = tr[tr["DMS_score"] >= tr["DMS_score"].quantile(1.0 - top_frac)].reset_index(drop=True)
+        print(f"[gen] top-{top_frac:.0%} filter -> {len(tr)} high-function training variants")
     train_combos = set(tr["combo"])
     tr_seqs = tr["mutated_sequence"].astype(str).tolist()
     tr_w = tr["DMS_score"].rank(pct=True).to_numpy()  # function weight in [0,1]
+    if len(tr_seqs) > int(max_train):  # subsample for speed
+        sel = rng.choice(len(tr_seqs), int(max_train), replace=False)
+        tr_seqs = [tr_seqs[i] for i in sel]
+        tr_w = tr_w[sel]
 
     tok = AutoTokenizer.from_pretrained("airkingbd/dplm_650m")
     base = EsmForMaskedLM.from_pretrained("airkingbd/dplm_650m")
@@ -3207,12 +3216,14 @@ def train_generative_design(
             enc = masked_ids(seqs, mps)
             tgt_ids = tok(seqs, return_tensors="pt", padding=True)["input_ids"].cuda()
             logits = model(**enc).logits
-            loss = 0.0
+            bi, pp, tg, ww = [], [], [], []
             for b, mp in enumerate(mps):
                 for p in mp:
-                    lp = F.log_softmax(logits[b, p], -1)
-                    loss = loss - tr_w[bidx[b]] * lp[tgt_ids[b, p]]
-            loss = loss / max(1, sum(len(mp) for mp in mps))
+                    bi.append(b); pp.append(p); tg.append(int(tgt_ids[b, p])); ww.append(float(tr_w[bidx[b]]))
+            bi = torch.tensor(bi, device="cuda"); pp = torch.tensor(pp, device="cuda")
+            tg = torch.tensor(tg, device="cuda"); ww = torch.tensor(ww, dtype=torch.float32, device="cuda")
+            logp = torch.log_softmax(logits[bi, pp], -1)  # vectorized over all masked positions
+            loss = (ww * (-logp[torch.arange(len(tg), device="cuda"), tg])).sum() / max(1, len(tg))
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
             opt.step()
@@ -3256,7 +3267,25 @@ def train_generative_design(
     rand_combos = [tuple(AAs[int(i)] for i in rng.integers(0, 20, len(positions))) for _ in range(int(n_samples))]
     rand_mean, _, _, _ = lib_quality(rand_combos)
     all_scores = np.array(list(combo_score.values()))
-    add_top = float(np.mean(np.sort(all_scores)[-int(n_samples):]))  # additive/oracle-ish top library
+    oracle_top = float(np.mean(np.sort(all_scores)[-int(n_samples):]))  # best-possible library
+
+    # ADDITIVE baseline (the hard one to beat): rank combos by sum of single-mutant
+    # effects, take the top n_samples, report their measured function.
+    sing = d[d["mutation_distance"] == 1]
+    wt_combo = tuple(wt[p - 1] for p in positions)
+    wt_score = float(combo_score.get(wt_combo, float(np.percentile(all_scores, 95))))
+    eff = {}
+    for _, rr in sing.iterrows():
+        tt = parse_mutation_notation(str(rr["mutation_notation"]))[0]
+        try:
+            pp = int(tt[1:-1])
+        except (ValueError, IndexError):
+            continue
+        if pp in positions:
+            eff[(positions.index(pp), tt[-1])] = float(rr["DMS_score"]) - wt_score
+    clist = list(combo_score.keys())
+    addp = np.array([sum(eff.get((i, a), 0.0) for i, a in enumerate(c)) for c in clist])
+    additive_top = float(np.mean([combo_score[clist[i]] for i in np.argsort(-addp)[: int(n_samples)]]))
 
     summary = {
         "assay": assay_name, "positions": positions, "epochs": int(epochs),
@@ -3265,13 +3294,178 @@ def train_generative_design(
         "n_novel_generated": int(n_novel), "coverage": round(gen_cov, 3),
         "unconditioned_DPLM_mean": base_mean,
         "random_lib_mean": rand_mean,
-        "top_library_ceiling": add_top,
+        "additive_top_baseline": additive_top,
+        "oracle_top_ceiling": oracle_top,
         "library_mean_overall": float(np.mean(all_scores)),
+        "beats_additive": bool(gen_mean > additive_top),
     }
     (Path(VOLUME_PATH) / out).parent.mkdir(parents=True, exist_ok=True)
     (Path(VOLUME_PATH) / out).write_text(json.dumps(summary, indent=2))
     volume.commit()
     print("[gen]", json.dumps(summary, indent=2))
+    return summary
+
+
+@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="H100", timeout=3600 * 8)
+def extract_all_function_features(
+    max_doubles: int = 10000,
+    batch_size: int = 32,
+    min_doubles: int = 60,
+    seed: int = 0,
+) -> dict:
+    """Extract DPLM hidden-state features (h_i, h_j at the two mutated positions)
+    + zero-shot PLL epistasis + measured specific-epistasis, for EVERY ProteinGym
+    function multi-mutant assay -- so Model 1 is reported across ~12 function
+    proteins (a distribution), not 2, and a function cross-protein transfer test
+    becomes possible. Saves feat_<name>.npz per assay; DPLM loaded once.
+    """
+    import json
+
+    import numpy as np
+    import pandas as pd
+    import torch
+
+    from phaseagent.dplm_backbone import _load_dplm, score_sequence_logprob
+    from phaseagent.epistasis_decomposition import add_global_specific_layers, decompose_multimutants
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.spectrum import AA_TO_ID
+
+    base = "raw/proteingym_v1_3/DMS_ProteinGym_substitutions"
+    assays = {
+        "GRB2": "GRB2_HUMAN_Faure_2021", "PABP": "PABP_YEAST_Melamed_2013",
+        "GCN4": "GCN4_YEAST_Staller_2018", "HIS7": "HIS7_YEAST_Pokusaeva_2019",
+        "F7YBW8a": "F7YBW8_MESOW_Aakre_2015", "F7YBW8d": "F7YBW8_MESOW_Ding_2023",
+        "CAPSD": "CAPSD_AAV2S_Sinai_2021", "PHOT": "PHOT_CHLRE_Chen_2023",
+        "D7PM05": "D7PM05_CLYGR_Somermeyer_2022", "Q6WV12": "Q6WV12_9MAXI_Somermeyer_2022",
+        "Q8WTC7": "Q8WTC7_9CNID_Somermeyer_2022",
+    }
+    rng = np.random.default_rng(seed)
+    model, tok = _load_dplm()
+    dev = next(model.parameters()).device
+    from scipy.stats import spearmanr
+
+    out_summary = {}
+    for name, stem in assays.items():
+        try:
+            d = pd.read_csv(Path(VOLUME_PATH) / f"{base}/{stem}.csv").rename(columns={"mutant": "mutation_notation"})
+        except Exception as e:
+            out_summary[name] = {"error": f"load: {e}"}
+            continue
+        d["dataset_id"] = name
+        d["DMS_score"] = pd.to_numeric(d["DMS_score"], errors="coerce")
+        d["mutation_distance"] = d["mutation_notation"].astype(str).apply(lambda s: len(parse_mutation_notation(s)))
+        d = d[d["DMS_score"].notna() & d["mutated_sequence"].notna()]
+        dec = add_global_specific_layers(decompose_multimutants(d, label_col="DMS_score", max_distance=2), label_col="DMS_score")
+        dbl = dec[(pd.to_numeric(dec["mutation_distance"], errors="coerce") == 2) & np.isfinite(dec["epsilon_specific"])].copy()
+        if len(dbl) < int(min_doubles):
+            out_summary[name] = {"skip": f"only {len(dbl)} covered doubles"}
+            continue
+        if len(dbl) > int(max_doubles):
+            dbl = dbl.sample(int(max_doubles), random_state=seed)
+        sg = d[d["mutation_distance"] == 1]
+        slk = {str(a): str(b) for a, b in zip(sg["mutation_notation"], sg["mutated_sequence"])}
+        one = sg.iloc[0]
+        t0 = parse_mutation_notation(str(one["mutation_notation"]))[0]
+        wt = list(str(one["mutated_sequence"])); wt[int(t0[1:-1]) - 1] = t0[0]; wt = "".join(wt)
+        recs = []
+        for _, r in dbl.iterrows():
+            toks = parse_mutation_notation(str(r["mutation_notation"]))
+            if len(toks) != 2:
+                continue
+            s1, s2 = slk.get(toks[0]), slk.get(toks[1])
+            if s1 is None or s2 is None:
+                continue
+            try:
+                p1, p2 = int(toks[0][1:-1]), int(toks[1][1:-1])
+            except (ValueError, IndexError):
+                continue
+            if not (1 <= p1 < len(wt) and 1 <= p2 < len(wt)):
+                continue
+            recs.append({"eps": float(r["epsilon_specific"]), "p1": p1, "p2": p2,
+                         "ma1": toks[0][-1], "ma2": toks[1][-1], "wa1": toks[0][0], "wa2": toks[1][0],
+                         "dd": str(r["mutated_sequence"]), "s1": s1, "s2": s2})
+        if len(recs) < int(min_doubles):
+            out_summary[name] = {"skip": f"only {len(recs)} reconstructable doubles"}
+            continue
+        seqs = sorted({wt} | {x for rec in recs for x in (rec["dd"], rec["s1"], rec["s2"])})
+        mean_ll = score_sequence_logprob(model, tok, seqs, batch_size=int(batch_size))
+        ll = {s: float(mean_ll[i]) * len(s) for i, s in enumerate(seqs)}
+        with torch.inference_mode():
+            enc = tok([wt], return_tensors="pt")
+            enc = {k: v.to(dev) for k, v in enc.items()}
+            H = model(**enc, output_hidden_states=True).hidden_states[-1][0].float().cpu().numpy()
+        N, Dh = len(recs), H.shape[1]
+        Hi, Hj, meta = np.zeros((N, Dh), np.float16), np.zeros((N, Dh), np.float16), np.zeros((N, 8), np.float32)
+        for k, rec in enumerate(recs):
+            Hi[k], Hj[k] = H[rec["p1"]], H[rec["p2"]]
+            pll = ll[rec["dd"]] - ll[rec["s1"]] - ll[rec["s2"]] + ll[wt]
+            meta[k] = [rec["eps"], pll, AA_TO_ID.get(rec["ma1"], 20), AA_TO_ID.get(rec["ma2"], 20),
+                       AA_TO_ID.get(rec["wa1"], 20), AA_TO_ID.get(rec["wa2"], 20), rec["p1"], rec["p2"]]
+        np.savez(Path(VOLUME_PATH) / f"outputs/epistasis/feat_{name}.npz", Hi=Hi, Hj=Hj, meta=meta)
+        zs = float(spearmanr(meta[:, 0], meta[:, 1]).statistic) if N > 10 else float("nan")
+        out_summary[name] = {"n_doubles": int(N), "zero_shot_pll": round(zs, 3)}
+        print(f"[all-func] {name}: {N} doubles, zero-shot={zs:.3f}")
+        volume.commit()
+    print("[all-func]", json.dumps(out_summary))
+    return out_summary
+
+
+@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="H100", timeout=3600 * 5)
+def extract_gb1wu_features(
+    assay_csv: str = "raw/proteingym_v1_3/DMS_ProteinGym_substitutions/SPG1_STRSG_Wu_2016.csv",
+    max_variants: int = 40000,
+    batch_size: int = 64,
+    out: str = "outputs/epistasis/gb1wu_feat.npz",
+    seed: int = 0,
+) -> dict:
+    """DPLM embeddings at the 4 GB1 editable positions, in each variant's OWN
+    sequence context (so the embeddings carry the genetic background) -- the
+    input for predicting 3rd-order (background-dependent) epistasis.
+    Saves emb (N, n_pos, D) float16, combo (N, n_pos) AA ids, and DMS_score.
+    """
+    import json
+
+    import numpy as np
+    import pandas as pd
+    import torch
+
+    from phaseagent.dplm_backbone import _load_dplm
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.spectrum import AA_TO_ID
+
+    rng = np.random.default_rng(seed)
+    d = pd.read_csv(Path(VOLUME_PATH) / assay_csv).rename(columns={"mutant": "mutation_notation"})
+    d["DMS_score"] = pd.to_numeric(d["DMS_score"], errors="coerce")
+    d = d[d["DMS_score"].notna() & d["mutated_sequence"].notna()].copy()
+    positions = sorted({int(t[1:-1]) for s in d["mutation_notation"].astype(str) for t in parse_mutation_notation(s)})
+    if len(d) > int(max_variants):
+        d = d.sample(int(max_variants), random_state=seed).reset_index(drop=True)
+    seqs = d["mutated_sequence"].astype(str).tolist()
+    scores = d["DMS_score"].to_numpy(np.float32)
+    L = len(seqs[0])
+    combo = np.array([[AA_TO_ID.get(s[p - 1], 20) for p in positions] for s in seqs], dtype=np.int16)
+
+    model, tok = _load_dplm()
+    dev = next(model.parameters()).device
+    D = model.config.hidden_size
+    emb = np.zeros((len(seqs), len(positions), D), np.float16)
+    with torch.inference_mode():
+        for st in range(0, len(seqs), int(batch_size)):
+            chunk = seqs[st : st + int(batch_size)]
+            enc = tok(chunk, return_tensors="pt", padding=True)
+            enc = {k: v.to(dev) for k, v in enc.items()}
+            H = model(**enc, output_hidden_states=True).hidden_states[-1].float().cpu().numpy()
+            for b in range(len(chunk)):
+                for pi, p in enumerate(positions):
+                    emb[st + b, pi] = H[b, p]  # token index = residue position (CLS at 0)
+            if st % (int(batch_size) * 50) == 0:
+                print(f"[gb1wu-feat] {st}/{len(seqs)}")
+    op = Path(VOLUME_PATH) / out
+    op.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(op, emb=emb, combo=combo, score=scores, positions=np.array(positions))
+    volume.commit()
+    summary = {"n_variants": len(seqs), "n_positions": len(positions), "hidden_dim": int(D), "out": out}
+    print("[gb1wu-feat]", json.dumps(summary))
     return summary
 
 
