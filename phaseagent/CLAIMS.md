@@ -23,6 +23,23 @@ Source: `outputs/epistasis/decomposition_summary.json` (derived from the committ
 | Proteins with specific share > 10% | 98% | `decomposition_summary.json:frac_proteins_spec_var_share_gt_0p1` |
 | Proteins with specific std > 0.3 kcal/mol | 85% | `decomposition_summary.json:frac_proteins_spec_std_gt_0p3` |
 
+### Decomposition bootstrap CIs (Section 7.1) — GROUNDED
+
+Source: `outputs/epistasis/decomposition_ci.json` — 2,000-resample percentile
+bootstrap over the 149 per-protein rows of the committed atlas
+(`scripts/bootstrap_decomposition_ci.py`, seed 0; each resample recomputes the
+exact paper statistic `build_decomposition_artifact.summarize`, so point estimates
+equal the committed `decomposition_summary.json`). Guarded by
+`tests/test_decomposition_ci.py` (no-drift + the three significance CIs exclude
+their null).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Median additive $R^2$ 95% CI (entirely $<0$) | $[-1.39, -0.58]$ | `decomposition_ci.json:median_r2_additive_ci95` |
+| Median +global $R^2$ 95% CI (entirely $>0$) | $[0.67, 0.74]$ | `decomposition_ci.json:median_r2_global_ci95` |
+| Median specific std 95% CI (kcal/mol) | $[0.39, 0.45]$ | `decomposition_ci.json:median_spec_std_kcal_ci95` |
+| Median specific variance share 95% CI | $[0.26, 0.33]$ | `decomposition_ci.json:median_spec_var_share_ci95` |
+
 The grey "measurement-scatter" band in `fig3_specific_epistasis.pdf` (`axvspan(0.1, 0.3)`)
 is an **illustrative reference only**, not a committed result — the §7.1 body text makes no
 numeric noise claim (iter17 removed the earlier unbacked "$\sim 0.1$ kcal/mol / four times"

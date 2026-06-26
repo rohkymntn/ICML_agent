@@ -319,7 +319,15 @@ Specific epistasis is therefore both large and ubiquitous: a real,
 widespread signal that an additive-plus-global model leaves entirely on the
 table. These numbers are computed by
 \texttt{scripts/build\_decomposition\_artifact.py} from the committed atlas and
-are listed in \cref{tab:decomp}.
+are listed in \cref{tab:decomp}. Bootstrapping the 149 proteins ($2{,}000$
+resamples) confirms each headline median is robust to protein sampling and that
+all three decomposition claims exclude their null: the additive $R^2$ median is
+$-0.91$ (95\% CI $[-1.39, -0.58]$, entirely below zero -- the additive baseline
+is worse than the mean for the typical protein), the $+$global median is $0.72$
+($[0.67, 0.74]$, entirely above zero -- the monotonic link genuinely recovers the
+gap), and the specific-epistasis median std is $0.42$ kcal/mol ($[0.39, 0.45]$) at
+a $28\%$ ($[26\%, 33\%]$) variance share. Source:
+\texttt{outputs/epistasis/decomposition\_ci.json}.
 
 \begin{figure}[t]
   \centering

@@ -1,0 +1,25 @@
+{
+  "n_bootstrap": 2000,
+  "seed": 0,
+  "n_proteins": 149,
+  "median_r2_additive": -0.9117856629393899,
+  "median_r2_additive_ci95": [
+    -1.3877417042000122,
+    -0.5787482037422276
+  ],
+  "median_r2_global": 0.7210276294585942,
+  "median_r2_global_ci95": [
+    0.674174061515095,
+    0.7429067824122899
+  ],
+  "median_spec_std_kcal": 0.4215575512110799,
+  "median_spec_std_kcal_ci95": [
+    0.3909690950974927,
+    0.45274108267497104
+  ],
+  "median_spec_var_share": 0.2789723705414057,
+  "median_spec_var_share_ci95": [
+    0.2570932175877101,
+    0.32582593848490504
+  ]
+}
