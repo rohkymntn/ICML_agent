@@ -1,0 +1,26 @@
+{
+  "n_bootstrap": 2000,
+  "seed": 0,
+  "assay": "GB1",
+  "n_doubles": 12000,
+  "matched_additive_spearman": 0.2800230235501447,
+  "matched_additive_ci95": [
+    0.23715799462473408,
+    0.312880168555697
+  ],
+  "gof_lift_model1": 1.090843426839847,
+  "gof_lift_model1_ci95": [
+    0.9874064589767299,
+    1.197166257751764
+  ],
+  "gof_lift_zeroshot": -0.2201631132459636,
+  "gof_lift_zeroshot_ci95": [
+    -0.3093629892948722,
+    -0.12138988403445122
+  ],
+  "gof_lift_delta_model1_minus_zeroshot": 1.3110065400858106,
+  "gof_lift_delta_ci95": [
+    1.1748833480553529,
+    1.4402411984514505
+  ]
+}

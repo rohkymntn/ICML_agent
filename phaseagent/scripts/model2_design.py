@@ -20,18 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
-from sklearn.model_selection import KFold
-
-sys.path.insert(0, "scripts")
-from train_model1 import load, train_fold
-from phaseagent.mutations import parse_mutation_notation
-from phaseagent.epistasis_decomposition import add_global_specific_layers, decompose_multimutants
 
 GREY, RED, BLUE = "#9A9A9A", "#C0504D", "#3B6FB6"
 AA = "ACDEFGHIKLMNPQRSTVWY"
@@ -41,6 +34,14 @@ FRACS = [0.05, 0.1, 0.2, 0.35, 0.5, 1.0]
 def build_oof_table(feat, assay_csv, epochs=200):
     """Decompose the assay, train Model 1 held-out-double OOF, and merge into the
     per-double table (glob, measured, true_eps, pred_eps) the paper analyses."""
+    # heavy deps (torch via train_model1) imported lazily so that importing this
+    # module for summarize_model2 / figure_model2 (tests, the CI bootstrap) stays cheap.
+    import sys
+    sys.path.insert(0, "scripts")
+    from sklearn.model_selection import KFold
+    from train_model1 import load, train_fold
+    from phaseagent.mutations import parse_mutation_notation
+    from phaseagent.epistasis_decomposition import add_global_specific_layers, decompose_multimutants
     d = pd.read_csv(assay_csv).rename(columns={"mutant": "mutation_notation"})
     d["dataset_id"] = "GB1"
     d["mutation_distance"] = d["mutation_notation"].astype(str).apply(lambda s: len(parse_mutation_notation(s)))

@@ -124,6 +124,24 @@ lift and matched-additive Spearman are positive).
 | Matched-additive within-bin Spearman | $0.28$ | `model2_GB1_summary.json:matched_additive_spearman` |
 | Matched-additive bins | 10 | `model2_GB1_summary.json:n_matched_bins` |
 
+### Model 2 design 95% CIs (Section 7.4, bootstrap) — GROUNDED
+
+Source: `outputs/epistasis/model2_ci.json` — 2,000-resample percentile bootstrap over the
+12,000 held-out GB1 doubles of `model2_oof_GB1.csv` (`scripts/bootstrap_model2_ci.py`,
+seed 0), recomputing the EXACT paper statistic (`summarize_model2`) on each resample so
+the matched-additive median-over-deciles and the top-10%-of-pool lifts are bootstrapped
+self-consistently; the Model 1 − zero-shot lift difference is paired (same resample).
+Point estimates equal the committed `model2_GB1_summary.json` (no drift, asserted in
+`run()`). Guarded by `tests/test_model2_ci.py` (no-drift + the three significance CIs
+exclude 0).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Matched-additive control Spearman 95% CI (excludes 0) | $[0.24, 0.31]$ | `model2_ci.json:matched_additive_ci95` |
+| Model 1 design lift 95% CI (excludes 0) | $[0.99, 1.20]$ | `model2_ci.json:gof_lift_model1_ci95` |
+| Model 1 − zero-shot rerank lift | $+1.31$ | `model2_ci.json:gof_lift_delta_model1_minus_zeroshot` |
+| Model 1 − zero-shot rerank lift 95% CI (excludes 0) | $[1.17, 1.44]$ | `model2_ci.json:gof_lift_delta_ci95` |
+
 ## Figures
 
 Every committed figure under `paper/figures_epistasis/` is cited in the paper and

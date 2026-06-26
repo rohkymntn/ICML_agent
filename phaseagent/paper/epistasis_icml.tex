@@ -494,8 +494,14 @@ the loop: within deciles of the additive prediction, where additive value is hel
 fixed, the median Spearman between predicted and measured specific epistasis is
 $0.28$ (10 bins) -- by construction, signal the additive model cannot access, so
 the recovered gain is genuine epistasis rather than relearned additivity
-(\cref{fig:model2}). All numbers derive from the committed
-\texttt{outputs/epistasis/model2\_oof\_GB1.csv}.
+(\cref{fig:model2}). Bootstrapping the held-out doubles ($2{,}000$ resamples)
+makes these significant: the matched-additive control Spearman is $0.28$
+(95\% CI $[0.24, 0.31]$, excluding zero), the Model 1 design lift is $+1.09$
+($[0.99, 1.20]$), and -- on the same resample -- Model 1's lift exceeds the
+zero-shot rerank lift by $+1.31$ ($[1.17, 1.44]$), so ranking by predicted
+epistasis significantly beats the PLM-as-reward baseline. All numbers derive from
+the committed \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
+\texttt{model2\_ci.json}.
 
 \begin{table}[t]
   \centering
