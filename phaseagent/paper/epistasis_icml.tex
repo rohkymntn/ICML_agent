@@ -62,11 +62,11 @@ diffusion protein language model (DPLM). A trained pairwise coupling head over
 DPLM representations predicts held-out functional epistasis far above the
 zero-shot pseudo-likelihood floor, and ranking candidate double mutants by
 predicted epistasis recovers gain-of-function combinations that the additive
-model structurally cannot find. Fine-tuning DPLM end-to-end with LoRA across
-proteins shows the skill transfers: on 25 held-out proteins that contribute no
-training examples it reaches a median Spearman of $0.33$, above the $0.25$
-zero-shot reference. All claims are backed by held-out evaluations on real
-deep-mutational-scanning data.
+model structurally cannot find. Fine-tuning DPLM end-to-end with LoRA across the 149 Megascale stability
+domains shows the same epistasis-prediction skill transfers across proteins:
+on 25 held-out domains that contribute no training examples it reaches a median
+Spearman of $0.33$, above the $0.25$ zero-shot reference. All claims are backed
+by held-out evaluations on real deep-mutational-scanning data.
 \end{abstract}
 
 \section{Introduction}
@@ -119,9 +119,11 @@ Our contributions are:
   additively-mediocre candidates, with a matched-additive control that isolates
   the part of the signal the additive model cannot see.
   \item \textbf{Cross-protein generalization} (\cref{sec:e2e}): an end-to-end
-  LoRA fine-tune of DPLM that transfers learned epistasis to 25 held-out proteins
-  (median Spearman $0.33$, above the $0.25$ zero-shot reference), showing the
-  skill is not memorized per assay.
+  LoRA fine-tune of DPLM that transfers learned epistasis to 25 held-out
+  Megascale stability domains (median Spearman $0.33$, above the $0.25$ zero-shot
+  reference), showing the skill is not memorized per protein. This cross-protein
+  test runs on the stability corpus because it is the only corpus here with
+  enough proteins for a held-out-\emph{protein} split.
 \end{itemize}
 
 \section{Related work}
@@ -242,9 +244,10 @@ selected design is unscored.
 Models 1 and 2 are trained per assay. To test whether learned epistasis
 \emph{transfers across proteins}, we fine-tune DPLM-650M end-to-end with LoRA
 (rank 64, adapters on the attention query/value projections) together with a
-pairwise epistasis head, trained on the double mutants of $\sim$120 proteins and
-evaluated on $\sim$25 \emph{held-out proteins} that contribute no training
-examples. The headline metric is the median per-held-out-protein Spearman
+pairwise epistasis head on the Megascale stability corpus -- the only corpus
+here with enough proteins (149 domains) for a held-out-\emph{protein} split --
+trained on the double mutants of $\sim$120 domains and evaluated on $\sim$25
+\emph{held-out domains} that contribute no training examples. The headline metric is the median per-held-out-protein Spearman
 correlation between predicted and measured specific epistasis. Per-protein
 targets are standardized before subsampling (with \texttt{ddof}$=0$). The run is
 defined in \texttt{modal\_app\_v2.py::train\_epistasis\_e2e}; its committed
@@ -515,15 +518,19 @@ the recovered gain is genuine epistasis rather than relearned additivity
 \label{sec:results-e2e}
 
 The end-to-end LoRA fine-tune (\cref{sec:e2e}) is trained on the double mutants of
-124 proteins and evaluated on the 25 held-out proteins that contribute no training
-examples. With rank-64 adapters (12.9M trainable parameters) and 10 epochs, it
-reaches a median per-held-out-protein Spearman of $0.33$ (mean $0.33$) between
-predicted and measured specific epistasis, clearing $\spearman > 0.2$ for 80\% of
-held-out proteins (\cref{tab:e2e}). This exceeds the zero-shot DPLM PLL reference
-of $0.25$ on the same residual target (\cref{sec:results-zs}) \emph{on proteins
-the head never saw}: the epistasis skill learned across proteins transfers to new
-ones, rather than being memorized per assay. All numbers are read from the
-committed \texttt{outputs/epistasis/e2e\_results.json}.
+124 Megascale stability domains and evaluated on the 25 held-out domains that
+contribute no training examples. With rank-64 adapters (12.9M trainable
+parameters) and 10 epochs, it reaches a median per-held-out-protein Spearman of
+$0.33$ (mean $0.33$) between predicted and measured specific epistasis, clearing
+$\spearman > 0.2$ for 80\% of held-out domains (\cref{tab:e2e}). This exceeds the
+zero-shot DPLM PLL reference of $0.25$ on the same residual target
+(\cref{sec:results-zs}) \emph{on proteins the head never saw}: the epistasis skill
+learned across proteins transfers to new ones, rather than being memorized per
+protein. The transfer is demonstrated on stability because that is the only corpus
+with enough proteins for a held-out-protein split; transferring the
+\emph{functional} skill across proteins is the analogous open problem
+(\cref{sec:limitations}). All numbers are read from the committed
+\texttt{outputs/epistasis/e2e\_results.json}.
 
 \begin{table}[t]
   \centering
@@ -551,9 +558,15 @@ committed \texttt{outputs/epistasis/e2e\_results.json}.
 Our strongest, fully-committed result is the stability decomposition; the
 functional prediction and design results rest on a small number of assays with
 complete combinatorial coverage (GB1, GFP), chosen precisely because every design
-is measurable, and may not represent all functional landscapes. The global layer
-is a per-protein monotonic link fit on the same assay it explains; we therefore
-report specific epistasis only as a held-out residual, never as in-sample fit.
+is measurable, and may not represent all functional landscapes. The cross-protein
+transfer result (\cref{sec:results-e2e}) is likewise demonstrated on the Megascale
+stability corpus, the only corpus here with enough proteins for a held-out-protein
+split; an analogous held-out-protein test of \emph{functional} epistasis transfer
+would require many more combinatorial functional assays than currently exist, so
+cross-protein transfer of the functional skill specifically remains future work.
+The global layer is a per-protein monotonic link fit on the same assay it
+explains; we therefore report specific epistasis only as a held-out residual,
+never as in-sample fit.
 Model 1's held-out-position transfer is the hardest regime and is expected to be
 weak. We do not make a generative design claim and therefore do not benchmark
 against discrete-diffusion guidance or reward-guided refinement; Model 2 is a
