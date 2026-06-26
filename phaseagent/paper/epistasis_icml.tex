@@ -145,8 +145,8 @@ Protein language models predict variant effects zero-shot from sequence
 likelihood \citep{meier2021language,wang2024dplm,lin2023esm2}, and recent work
 argues they implicitly encode epistasis. We separate the claim: PLM
 pseudo-likelihood tracks the \emph{global}, stability-coupled component, but its
-zero-shot epistasis signal is weak even on stability and is expected to be near
-zero on functional assays (\cref{sec:results-zs}). This motivates a \emph{trained}
+zero-shot epistasis signal is weak even on stability and, as we measure directly,
+near zero on functional assays (\cref{sec:results-zs}). This motivates a \emph{trained}
 read-out rather than a zero-shot score.
 
 \paragraph{Assay-labeled models.}
@@ -666,8 +666,9 @@ cross-protein transfer of the functional skill specifically remains future work.
 The global layer is a per-protein monotonic link fit on the same assay it
 explains; we therefore report specific epistasis only as a held-out residual,
 never as in-sample fit.
-Model 1's held-out-position transfer is the hardest regime and is expected to be
-weak. We do not make a generative design claim and therefore do not benchmark
+Model 1's held-out-position transfer is the hardest regime and is correspondingly
+the weakest we report, though it stays above chance (\cref{sec:results-model12}).
+We do not make a generative design claim and therefore do not benchmark
 against discrete-diffusion guidance \citep{gruver2023protein,nisonoff2025unlocking}
 or reward-guided refinement \citep{wang2025drakes,li2024svdd}; Model 2 is a
 ranking policy over measurable candidates. Finally, all results are
