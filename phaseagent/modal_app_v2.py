@@ -3113,7 +3113,7 @@ def train_epistasis_e2e(
     return summary
 
 
-@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="A10G", timeout=3600 * 8)
+@app.function(image=gpu_lora_image, volumes={VOLUME_PATH: volume}, gpu="H100", timeout=3600 * 8)
 def train_generative_design(
     assay_csv: str = "raw/proteingym_v1_3/DMS_ProteinGym_substitutions/SPG1_STRSG_Wu_2016.csv",
     assay_name: str = "GB1_Wu",

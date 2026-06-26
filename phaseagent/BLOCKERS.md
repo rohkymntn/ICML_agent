@@ -2,8 +2,21 @@
 
 ## B1 (iter14): Does DoD #4 require a discrete-diffusion guidance baseline?
 
-**Status:** OPEN — the last substantive gate to `ICML_READY`. Everything else in the
-Definition of Done is grounded and green (see PROGRESS.md).
+**Status (updated iter15):** BEING RESOLVED BY COMPUTATION — superseding the iter14
+"human scope call" framing. Rather than argue the baseline scoped-out, iter15 launched
+the actual baseline the DoD names: `train_generative_design` (`ap-BlbHQjQn930EN3cSt5zDpZ`,
+H100, detached, RUNNING — an initial A10G launch OOM'd; fixed to `gpu="H100"`) — a function-weighted (reward-guided) LoRA fine-tune of DPLM-650M
+(a discrete-diffusion PLM) that GENERATES high-function multi-mutants via iterative
+masked-diffusion sampling, evaluated on the COMPLETE combinatorial GB1_Wu assay (4 sites,
+149,360 measured combos) so every generated combo is measurable. This IS "one strong
+discrete-diffusion guidance baseline." When `gen_design.json` lands and is folded into a
+grounded generative-design subsection + CLAIMS.md row + guard test, **B1 dissolves** — the
+baseline exists by computation, so no scope argument is needed and no human ratification is
+required to satisfy DoD #4's literal wording. (If the run fails terminally, fall back to the
+scope argument below, which a human would then need to ratify.)
+
+**Original framing (iter14), retained for context:** OPEN — the last substantive gate to
+`ICML_READY`. Everything else in the Definition of Done is grounded and green (see PROGRESS.md).
 
 **The DoD #4 wording:** "Main-conference baseline set is computed and tabulated on the
 SAME tasks: zero-shot DPLM PLL, additive baseline, and the design/generative
