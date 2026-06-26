@@ -1,0 +1,13 @@
+{
+  "n_doubles": 120000,
+  "n_proteins": 149,
+  "n_holdout_proteins": 25,
+  "epochs": 10,
+  "lora_r": 64,
+  "trainable_params_M": 12.85,
+  "heldout_protein_median_spearman": 0.33486797021766085,
+  "heldout_protein_mean_spearman": 0.328865348425062,
+  "frac_heldout_prot_gt_0p2": 0.8,
+  "n_heldout_prot_scored": 25,
+  "zero_shot_reference": 0.25
+}

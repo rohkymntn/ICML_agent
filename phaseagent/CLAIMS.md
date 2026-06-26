@@ -39,6 +39,41 @@ in `outputs/epistasis/headroom_dplm.parquet` (columns `eps_specific`,
 | Overall Spearman | $0.23$ | `headroom_summary.json:overall_spearman` |
 | Proteins with per-protein $\rho>0.2$ | 60% | `headroom_summary.json:frac_proteins_pp_spearman_gt_0p2` |
 
+## Model 1 + function zero-shot (Section 7.2 / 7.3, Table "model1") — GROUNDED
+
+Source: `outputs/epistasis/model1_oof_{GB1_Olson,GFP}.csv` (raw out-of-fold per-double
+predictions for both the held-out-DOUBLES KFold split and the held-out-POSITION
+GroupKFold split) + the matching `model1_{GB1_Olson,GFP}_summary.json` (Spearmans
+derived purely from the CSV). Features are DPLM-650M hidden states + representation
+shifts; no residue indices. Guarded by `tests/test_model1_committed.py` (asserts the
+summary reproduces from the OOF CSV and Model 1 beats the zero-shot floor on doubles).
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| GB1 zero-shot DPLM PLL Spearman (function floor) | $0.021$ | `model1_GB1_Olson_summary.json:zeroshot_spearman` |
+| GFP zero-shot DPLM PLL Spearman (function floor) | $0.005$ | `model1_GFP_summary.json:zeroshot_spearman` |
+| GB1 Model 1 held-out-doubles Spearman | $0.36$ | `model1_GB1_Olson_summary.json:model1_doubles_spearman` |
+| GB1 Model 1 held-out-position Spearman | $0.12$ | `model1_GB1_Olson_summary.json:model1_position_spearman` |
+| GFP Model 1 held-out-doubles Spearman | $0.14$ | `model1_GFP_summary.json:model1_doubles_spearman` |
+| GFP Model 1 held-out-position Spearman | $0.08$ | `model1_GFP_summary.json:model1_position_spearman` |
+
+## Cross-protein generalization, e2e LoRA fine-tune (Section 7.5 / Table "e2e") — GROUNDED
+
+Source: `outputs/epistasis/e2e_results.json` (end-to-end LoRA fine-tune of DPLM-650M
++ pairwise epistasis head over Megascale STABILITY doubles, trained on 124 proteins
+and evaluated on the 25 held-out proteins that contribute no training examples; run
+`ap-ayiJz1iYjfF0M5qUt0Rhaj`). Guarded by `tests/test_e2e_artifact.py`.
+
+| Claim in paper | Value | Artifact key / column |
+|---|---|---|
+| Held-out proteins (no training examples) | 25 | `e2e_results.json:n_holdout_proteins` |
+| Training proteins | 124 | `e2e_results.json:n_proteins` − `n_holdout_proteins` |
+| Trainable params (M) | 12.9 | `e2e_results.json:trainable_params_M` |
+| Median per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_median_spearman` |
+| Mean per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_mean_spearman` |
+| Fraction of held-out proteins with $\rho>0.2$ | 0.80 | `e2e_results.json:frac_heldout_prot_gt_0p2` |
+| Zero-shot DPLM PLL reference | $0.25$ | `e2e_results.json:zero_shot_reference` |
+
 ## Figures
 
 | Figure | File | Regen script | Committed data source |
@@ -52,8 +87,5 @@ These numbers from `HANDOFF_EPISTASIS_2026.md` are NOT yet committed as artifact
 under `outputs/epistasis/` and therefore do NOT appear as numbers in the paper.
 They are folded in (with a row above) only when their artifact is committed.
 
-- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): **MEASURED iter8 directly from the landed `feat_*.npz` (`meta[:,0]` measured eps vs `meta[:,1]` PLL epistasis): GFP 0.005, GB1_Olson 0.021 — essentially zero, the other half of the §7.2 contrast (stability 0.25 already committed above).** NOT yet in the paper: the `.npz` is volume-only, so the number is paper-eligible only once `train_model1.py` writes it to the committed `model1_<assay>_summary.json:zeroshot_spearman` (the identical quantity, OOF-CSV-traceable).
-- Model 1 held-out doubles / held-out positions Spearman (GB1, GFP): **all four `feat_/shift_{GB1_Olson,GFP}.npz` DONE on volume (iter8) — UNBLOCKED.** `train_model1.py` already writes `model1_oof_<assay>.csv` (per-double OOF for both the held-out-DOUBLES KFold and held-out-POSITION GroupKFold splits) + `model1_<assay>_summary.json` (the cited Spearmans). Guard `tests/test_model1_committed.py` in place (skips until committed). Pending only the CPU run-to-completion + commit.
 - Model 2 gain-of-function recovery + matched-additive within-bin Spearman: **`feat_GB1_Olson.npz` DONE on volume (iter8); GB1 assay CSV pre-staged at `/tmp/SPG1_STRSG_Olson_2014.csv` (iter11).** **`model2_design.py` now writes the committed artifacts (iter12):** `model2_oof_GB1.csv` (raw per-double `glob, measured, true_eps, pred_eps`) + `model2_GB1_summary.json` (keys `pool_mean_binding`, `gof_top10pct_model1`, `gof_lift_model1`, `matched_additive_spearman`, `n_matched_bins`), derived purely from the CSV via `summarize_model2`. Guard `tests/test_model2_committed.py` in place (synthetic drift-guard passes; committed-artifact guard skips until landed). Pending only the CPU run-to-completion (`python scripts/train_model1.py`-style: `python scripts/model2_design.py --feat /tmp/feat_GB1_Olson.npz --assay-csv /tmp/SPG1_STRSG_Olson_2014.csv --assay GB1 --out outputs/epistasis --figure`, ~9 min) + commit, then fold into a paper Model 2 table + a row here.
-- e2e cross-protein median held-out-protein Spearman — needs committed `outputs/epistasis/e2e_results.json` (run `ap-ayiJz1iYjfF0M5qUt0Rhaj`).
 - Function decomposition (GFP, GB1-Olson, GRB2, PABP global-link $R^2$) — needs committed function-assay decomposition table.

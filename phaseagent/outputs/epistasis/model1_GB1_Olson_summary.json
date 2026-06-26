@@ -1,0 +1,11 @@
+{
+  "assay": "GB1_Olson",
+  "n_doubles": 12000,
+  "dim": 1280,
+  "use_shift": true,
+  "zeroshot_spearman": 0.021201189755006587,
+  "model1_doubles_spearman": 0.35952186190642343,
+  "model1_position_spearman": 0.12361188141937772,
+  "delta_doubles": 0.33832067215141687,
+  "delta_position": 0.10241069166437114
+}

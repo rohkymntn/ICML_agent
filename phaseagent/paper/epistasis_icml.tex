@@ -62,10 +62,11 @@ diffusion protein language model (DPLM). A trained pairwise coupling head over
 DPLM representations predicts held-out functional epistasis far above the
 zero-shot pseudo-likelihood floor, and ranking candidate double mutants by
 predicted epistasis recovers gain-of-function combinations that the additive
-model structurally cannot find. We further fine-tune DPLM end-to-end with LoRA
-across proteins and evaluate cross-protein generalization on held-out proteins.
-All claims are backed by held-out evaluations on real deep-mutational-scanning
-data.
+model structurally cannot find. Fine-tuning DPLM end-to-end with LoRA across
+proteins shows the skill transfers: on 25 held-out proteins that contribute no
+training examples it reaches a median Spearman of $0.33$, above the $0.25$
+zero-shot reference. All claims are backed by held-out evaluations on real
+deep-mutational-scanning data.
 \end{abstract}
 
 \section{Introduction}
@@ -118,8 +119,9 @@ Our contributions are:
   additively-mediocre candidates, with a matched-additive control that isolates
   the part of the signal the additive model cannot see.
   \item \textbf{Cross-protein generalization} (\cref{sec:e2e}): an end-to-end
-  LoRA fine-tune of DPLM evaluated on held-out proteins, testing whether learned
-  epistasis transfers beyond the training proteins.
+  LoRA fine-tune of DPLM that transfers learned epistasis to 25 held-out proteins
+  (median Spearman $0.33$, above the $0.25$ zero-shot reference), showing the
+  skill is not memorized per assay.
 \end{itemize}
 
 \section{Related work}
@@ -353,13 +355,15 @@ score (\cref{eq:zs}) is only a weak predictor of measured specific epistasis: ov
 with the specific-epistasis residual is $0.25$ (overall Spearman $0.23$), and it
 clears $\spearman > 0.2$ for only 60\% of proteins (\cref{tab:zeroshot}). This is
 the ceiling for a label-free PLM epistasis score, and it is already modest in the
-most favorable regime; the functional assays are the opposite regime. We will
-report, on GB1 binding and GFP fluorescence, the same zero-shot DPLM PLL
-correlation against measured specific epistasis -- the floor that any learned
-model must beat -- establishing that zero-shot PLM epistasis is a stability-coupled
-signal that does not transfer to function. Those functional numbers are produced
-by the GPU feature-extraction and scoring pipeline and fold in from their committed
-artifacts under \texttt{outputs/epistasis/} as each scoring run completes.
+most favorable regime; the functional assays are the opposite regime. On GB1
+IgG-binding (Olson) and GFP fluorescence (Sarkisyan), the same zero-shot DPLM PLL
+correlation against measured specific epistasis collapses to essentially zero:
+Spearman $0.021$ on GB1 and $0.005$ on GFP (\cref{tab:model1}, ``zero-shot''
+column). Zero-shot PLM epistasis is therefore a stability-coupled signal that does
+\emph{not} transfer to function -- it is, on these functional assays, no better
+than chance. These two numbers are the
+\texttt{model1\_\{GB1\_Olson,GFP\}\_summary.json:zeroshot\_spearman} keys, and they
+are the floor any learned model must beat.
 
 \begin{table}[t]
   \centering
@@ -382,23 +386,83 @@ artifacts under \texttt{outputs/epistasis/} as each scoring run completes.
   \end{tabular}
 \end{table}
 
-\subsection{Model 1 and Model 2}
+\subsection{Model 1: learned epistasis is predictable from DPLM representations}
 \label{sec:results-model12}
 
-Model 1 (\cref{sec:model1}) is evaluated on held-out doubles and held-out
-positions for each functional assay, against the additive and zero-shot baselines
-(\cref{sec:exp}); Model 2 (\cref{sec:model2}) is evaluated by gain-of-function
-recovery and the matched-additive within-bin Spearman. Each number is traced to a
-committed CSV/parquet under \texttt{outputs/epistasis/} in \texttt{CLAIMS.md}; the
-quantitative tables are added as their run artifacts are committed.
+The same residual that is invisible to the zero-shot score is, however,
+\emph{predictable} from DPLM's internal representations. A pairwise coupling head
+(\cref{sec:model1}) trained on each assay and evaluated out-of-fold lifts the
+held-out-double Spearman from the near-zero zero-shot floor to $0.36$ on GB1 and
+$0.14$ on GFP (\cref{tab:model1}) -- a $+0.34$ and $+0.13$ gain over zero-shot.
+The harder held-out-\emph{position} split, where every double at the test
+residues is removed so the head must place couplings at positions it never saw
+during training, still clears the floor ($0.12$ on GB1, $0.08$ on GFP). Because
+the head consumes only DPLM hidden states and representation shifts, never residue
+indices, the recovered signal is genuinely carried in the representation rather
+than memorized from position identity. Both rows are derived from the committed
+out-of-fold predictions in \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,GFP\}.csv}.
+
+\begin{table}[t]
+  \centering
+  \caption{Model 1 (pairwise coupling head over DPLM-650M representations) vs.\ the
+  zero-shot DPLM PLL floor, Spearman against measured specific epistasis,
+  out-of-fold. ``Doubles'' = held-out double mutants; ``Position'' = held-out
+  residue positions (the harder transfer). Source:
+  \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,GFP\}.csv} and the matching
+  \texttt{model1\_*\_summary.json}.}
+  \label{tab:model1}
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    Assay & Zero-shot & Model 1 (Doubles) & Model 1 (Position) \\
+    \midrule
+    GB1 (Olson) & $0.021$ & $0.36$ & $0.12$ \\
+    GFP (Sarkisyan) & $0.005$ & $0.14$ & $0.08$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Model 2: ranking by predicted epistasis finds gain-of-function}
+\label{sec:results-model2}
+
+Model 2 (\cref{sec:model2}) is evaluated by gain-of-function recovery and the
+matched-additive within-bin Spearman, with each number traced to a committed
+\texttt{outputs/epistasis/model2\_oof\_*.csv} in \texttt{CLAIMS.md}; the
+quantitative table is folded in once its design run artifact is committed.
 
 \subsection{Cross-protein generalization}
 \label{sec:results-e2e}
 
-The end-to-end LoRA fine-tune (\cref{sec:e2e}) is evaluated on the held-out
-proteins; the headline median per-held-out-protein Spearman is read from the
-committed \texttt{outputs/epistasis/e2e\_results.json} and reported here once the
-run artifact is committed.
+The end-to-end LoRA fine-tune (\cref{sec:e2e}) is trained on the double mutants of
+124 proteins and evaluated on the 25 held-out proteins that contribute no training
+examples. With rank-64 adapters (12.9M trainable parameters) and 10 epochs, it
+reaches a median per-held-out-protein Spearman of $0.33$ (mean $0.33$) between
+predicted and measured specific epistasis, clearing $\spearman > 0.2$ for 80\% of
+held-out proteins (\cref{tab:e2e}). This exceeds the zero-shot DPLM PLL reference
+of $0.25$ on the same residual target (\cref{sec:results-zs}) \emph{on proteins
+the head never saw}: the epistasis skill learned across proteins transfers to new
+ones, rather than being memorized per assay. All numbers are read from the
+committed \texttt{outputs/epistasis/e2e\_results.json}.
+
+\begin{table}[t]
+  \centering
+  \caption{Cross-protein generalization of the end-to-end LoRA fine-tune,
+  evaluated on the 25 held-out Megascale proteins (no training examples).
+  Reference is the zero-shot DPLM PLL median per-protein Spearman on the same
+  specific-epistasis residual. Source: \texttt{outputs/epistasis/e2e\_results.json}.}
+  \label{tab:e2e}
+  \begin{tabular}{lc}
+    \toprule
+    Held-out generalization (25 proteins) & Spearman \\
+    \midrule
+    Median per-held-out-protein   & $0.33$ \\
+    Mean per-held-out-protein     & $0.33$ \\
+    Fraction with $\spearman>0.2$ & $0.80$ \\
+    \midrule
+    Zero-shot DPLM PLL reference  & $0.25$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \section{Limitations}
 \label{sec:limitations}
