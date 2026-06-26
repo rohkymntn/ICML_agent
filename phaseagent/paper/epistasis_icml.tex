@@ -514,9 +514,11 @@ out-of-fold predictions in \texttt{outputs/epistasis/model1\_oof\_\{GB1\_Olson,G
 On the 12{,}000 held-out GB1 double mutants, we form the design pool from the
 additively-mediocre candidates (those below the median additive prediction, where
 the additive model rates everything roughly equal) and select the top $10\%$ by
-each reward. Ranking by Model 1's predicted specific epistasis lifts the mean
-measured binding of the selection by $+1.09$ over the pool, recovering most of the
-$+1.62$ oracle lift available to a perfect epistasis ranker
+each reward. Measured binding is the ProteinGym DMS score for the Olson GB1
+assay -- a dimensionless log-scale binding-enrichment value -- so the lifts
+below are on that log scale. Ranking by Model 1's predicted specific epistasis
+lifts the mean measured binding of the selection by $+1.09$ over the pool,
+recovering most of the $+1.62$ oracle lift available to a perfect epistasis ranker
 (\cref{tab:model2}). The standard PLM-as-reward design baseline -- best-of-$N$
 reranking by the zero-shot DPLM PLL epistasis -- does \emph{worse than random
 selection} from the pool ($-0.22$ lift), because that score is essentially blind
@@ -537,8 +539,9 @@ the committed \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
 \begin{table}[t]
   \centering
   \caption{Model 2 design on held-out GB1 doubles ($n=12{,}000$): mean measured
-  binding of the top $10\%$ selected from the additively-mediocre pool by each
-  reward, and the lift over the additive pool mean. Ranking by Model 1's predicted
+  binding (log-scale ProteinGym DMS score, dimensionless) of the top $10\%$
+  selected from the additively-mediocre pool by each reward, and the lift over
+  the additive pool mean. Ranking by Model 1's predicted
   epistasis recovers gain-of-function combinations the additive model rates equal;
   best-of-$N$ reranking by the zero-shot DPLM PLL reward is worse than random.
   Source: \texttt{outputs/epistasis/model2\_oof\_GB1.csv} and
