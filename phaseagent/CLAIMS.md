@@ -52,8 +52,8 @@ These numbers from `HANDOFF_EPISTASIS_2026.md` are NOT yet committed as artifact
 under `outputs/epistasis/` and therefore do NOT appear as numbers in the paper.
 They are folded in (with a row above) only when their artifact is committed.
 
-- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): pending the function feature/scoring pipeline (`extract_function_features` / function PLL scoring) — needs committed scoring CSV. This is the other half of the §7.2 contrast (function side, expected near zero); the stability side is now committed (table above).
-- Model 1 held-out doubles / held-out positions Spearman (GB1, GFP) — needs committed `train_model1.py` output.
-- Model 2 gain-of-function recovery + matched-additive within-bin Spearman — needs committed `model2_design.py` output.
+- Zero-shot DPLM PLL epistasis Spearman, FUNCTION (GB1, GFP): **pipeline LAUNCHED iter6** (`extract_function_features` runs `ap-i2Bh2A0rlRqXa8etBUAlOB` GB1, `ap-2VjzrGk4wjdIgAw5wNaI8U` GFP, A10G, RUNNING). The number is the `zero_shot_pll_spearman` key of the run's printed summary / derivable from `feat_*.npz` (`meta[:,0]` measured eps vs `meta[:,1]` PLL epistasis). This is the other half of the §7.2 contrast (function side, expected near zero); stability side already committed (table above).
+- Model 1 held-out doubles / held-out positions Spearman (GB1, GFP): **feature runs LAUNCHED iter6** — `shift_{GB1_Olson,GFP}.npz` DONE on volume, `feat_{GB1_Olson,GFP}.npz` RUNNING. Needs `train_model1.py` extended to write a committed result CSV under `outputs/epistasis/` (`.npz` stay on volume).
+- Model 2 gain-of-function recovery + matched-additive within-bin Spearman: **gated on `feat_GB1_Olson.npz` (LAUNCHED iter6)** — needs `model2_design.py` extended to write a committed result CSV.
 - e2e cross-protein median held-out-protein Spearman — needs committed `outputs/epistasis/e2e_results.json` (run `ap-ayiJz1iYjfF0M5qUt0Rhaj`).
 - Function decomposition (GFP, GB1-Olson, GRB2, PABP global-link $R^2$) — needs committed function-assay decomposition table.
