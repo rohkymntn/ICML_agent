@@ -328,8 +328,13 @@ size $1024$ under a Huber (smooth-$L_1$) loss on per-fold-standardized targets.
 The held-out-doubles split is $5$-fold shuffled cross-validation; the
 held-out-position split is $5$-fold grouped cross-validation keyed on residue
 position, so no test pair's positions appear in training. All features are
-$z$-scored per dimension, and the head never receives position indices. Full
-configuration: \texttt{scripts/train\_model1.py}.
+$z$-scored per dimension, and the head never receives position indices. Every
+randomized procedure -- the cross-validation splits, the head and LoRA weight
+initialization, the end-to-end fine-tune's per-protein subsampling, and the
+$2{,}000$-resample bootstraps used for all confidence intervals -- runs with a
+fixed seed ($0$), so the reported numbers and committed artifacts reproduce
+deterministically from the committed scripts. Full configuration:
+\texttt{scripts/train\_model1.py}.
 
 \section{Results}
 \label{sec:results}
