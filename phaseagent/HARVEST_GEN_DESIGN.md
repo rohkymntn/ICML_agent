@@ -27,7 +27,10 @@ block; its text is unchanged, shifted +1 by iter53's §4 line), and the Step-1 a
 (its preceding `\end{figure}` at line 609). Required macros are
 loaded: `natbib` (line 97 of `icml2025.sty`) provides `\citet`, and `cleveref` (line 19 of the
 `.tex`) provides `\cref`. So the patch still applies cleanly; re-run this currency check if the
-paper is edited again before the artifact lands.
+paper is edited again before the artifact lands. (Re-confirmed iter57: untouched by iter54/55/56
+except line-neutral edits, so all three anchors still match verbatim --
+`\subsection{Cross-protein generalization}` at line 611, `\end{figure}` at 609, the §7 block at
+305--311, the §9 block at 677--680.)
 
 **DRESS-REHEARSED end-to-end iter46 (both branches proven, then reverted).** Prior iterations
 verified this patch piece-by-piece (key names, anchor lines, guard fail-safety); iter46 ran the
@@ -43,6 +46,16 @@ WHOLE harvest against two synthetic `gen_design.json` artifacts and reverted:
 So both outcome branches are confirmed to apply cleanly, compile, fit the 8-page body budget, and
 keep the tree green. The only defect found was the Step-5 `tectonic --outdir` gotcha (now fixed:
 `mkdir -p` first). The harvest is now a fully mechanical paste-and-fill with no remaining latent risk.
+
+**PAGE-BUDGET RE-VERIFIED iter57 against the CURRENT (grown) paper.** The iter46 rehearsal ran
+against a body ~6 source lines shorter (iters 47/48/49/50/53/55 each added ~1 line since). Because
+the new §results-gen subsection lands on p.7 and pushes the closing sections down, and the current
+p.8 is dense (Limitations tail + Conclusion + Impact + References-start all on p.8, References
+spilling to p.9), the page budget was re-checked end-to-end: applied Step 1 (WIN block) + Steps 2-3
+to the live paper with representative numbers, `tectonic` exit 0 / 9 pp / 0 overfull / 0 undefined
+refs/cites, the new §8.5 lands on **p.7** and **§10 Conclusion stays on p.8** (Impact + References
+after), then reverted. So the ICML 8-page main-text limit (intro→Conclusion) still holds with the
+harvest applied to the current paper, not just the iter46 body.
 
 ## Step 0 — pull + commit the artifact, run the guard
 ```
