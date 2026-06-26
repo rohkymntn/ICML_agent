@@ -33,25 +33,32 @@ def _ci(vals):
 def bootstrap_assay(df, b=B, seed=SEED):
     """Percentile-bootstrap CIs over the held-out doubles of one assay.
 
-    Resamples (y, model1, zero-shot) triples with replacement and recomputes both
-    Spearmans on the SAME resample so their difference is paired (a clean
-    significance test for the gain over the zero-shot floor)."""
+    Resamples (y, model1-doubles, zero-shot, model1-position) tuples with
+    replacement and recomputes every Spearman on the SAME resample, so the
+    doubles-minus-zero-shot difference is paired (a clean significance test for the
+    gain over the zero-shot floor) and the harder held-out-position split gets a CI
+    on the same footing -- the position split's null is chance (Spearman 0), so a CI
+    excluding 0 is the significance test that it 'still clears the floor'."""
     y = df["y_true"].to_numpy()
     m1 = df["oof_doubles"].to_numpy()
     zs = df["pll"].to_numpy()
+    pos = df["oof_position"].to_numpy()
     point_m1 = float(spearmanr(y, m1).statistic)
     point_zs = float(spearmanr(y, zs).statistic)
+    point_pos = float(spearmanr(y, pos).statistic)
 
     rng = np.random.default_rng(seed)
     n = len(y)
     bm1 = np.empty(b)
     bzs = np.empty(b)
     bdelta = np.empty(b)
+    bpos = np.empty(b)
     for k in range(b):
         idx = rng.integers(0, n, n)
         a = float(spearmanr(y[idx], m1[idx]).statistic)
         c = float(spearmanr(y[idx], zs[idx]).statistic)
-        bm1[k], bzs[k], bdelta[k] = a, c, a - c
+        p = float(spearmanr(y[idx], pos[idx]).statistic)
+        bm1[k], bzs[k], bdelta[k], bpos[k] = a, c, a - c, p
     return {
         "n_doubles": int(n),
         "model1_doubles_spearman": point_m1,
@@ -60,6 +67,8 @@ def bootstrap_assay(df, b=B, seed=SEED):
         "zeroshot_ci95": _ci(bzs),
         "delta_doubles": point_m1 - point_zs,
         "delta_ci95": _ci(bdelta),
+        "model1_position_spearman": point_pos,
+        "model1_position_ci95": _ci(bpos),
     }
 
 
@@ -72,8 +81,11 @@ def run(out="outputs/epistasis"):
         # no-drift: bootstrap point estimates must equal the committed summary
         assert abs(r["model1_doubles_spearman"] - summ["model1_doubles_spearman"]) < 1e-9, a
         assert abs(r["zeroshot_spearman"] - summ["zeroshot_spearman"]) < 1e-9, a
-        # significance: the gain over the zero-shot floor excludes 0
+        assert abs(r["model1_position_spearman"] - summ["model1_position_spearman"]) < 1e-9, a
+        # significance: the gain over the zero-shot floor excludes 0, and the harder
+        # held-out-position split is significantly above chance (CI excludes 0)
         assert r["delta_ci95"][0] > 0, a
+        assert r["model1_position_ci95"][0] > 0, a
         res["assays"][a] = r
     (out / "model1_ci.json").write_text(json.dumps(res, indent=2) + "\n")
     return res
@@ -85,4 +97,5 @@ if __name__ == "__main__":
         ci = lambda k: tuple(round(x, 3) for x in v[k])
         print(f"[{a}] Model1 {v['model1_doubles_spearman']:.3f} CI{ci('model1_doubles_ci95')}  "
               f"zero-shot {v['zeroshot_spearman']:.3f} CI{ci('zeroshot_ci95')}  "
-              f"delta {v['delta_doubles']:.3f} CI{ci('delta_ci95')}")
+              f"delta {v['delta_doubles']:.3f} CI{ci('delta_ci95')}  "
+              f"position {v['model1_position_spearman']:.3f} CI{ci('model1_position_ci95')}")

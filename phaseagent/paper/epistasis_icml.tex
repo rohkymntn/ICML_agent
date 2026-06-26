@@ -446,7 +446,10 @@ the paired-resample gain over zero-shot is significant on both assays
 \texttt{outputs/epistasis/model1\_ci.json}.
 The harder held-out-\emph{position} split, where every double at the test
 residues is removed so the head must place couplings at positions it never saw
-during training, still clears the floor ($0.12$ on GB1, $0.08$ on GFP). Because
+during training, still clears the floor ($0.12$ on GB1, $0.08$ on GFP); the same
+bootstrap puts these at $0.12$ (95\% CI $[0.10, 0.14]$) and $0.08$
+($[0.06, 0.10]$), both excluding zero, so even this cross-position transfer is
+significantly above chance. Because
 the head consumes only DPLM hidden states and representation shifts, never residue
 indices, the recovered signal is genuinely carried in the representation rather
 than memorized from position identity. Both rows are derived from the committed

@@ -32,14 +32,18 @@ def test_ci_point_estimates_no_drift_and_significant():
         # point estimates equal the committed Model 1 summary (no drift)
         assert v["model1_doubles_spearman"] == summ["model1_doubles_spearman"]
         assert v["zeroshot_spearman"] == summ["zeroshot_spearman"]
+        assert v["model1_position_spearman"] == summ["model1_position_spearman"]
         # each CI brackets its point estimate
         for key, ci in [("model1_doubles_spearman", "model1_doubles_ci95"),
                         ("zeroshot_spearman", "zeroshot_ci95"),
-                        ("delta_doubles", "delta_ci95")]:
+                        ("delta_doubles", "delta_ci95"),
+                        ("model1_position_spearman", "model1_position_ci95")]:
             lo, hi = v[ci]
             assert lo <= v[key] <= hi, f"{assay}: {key} outside {ci}"
-        # the gain over the zero-shot floor is significant
+        # the gain over the zero-shot floor is significant, and the harder
+        # held-out-position split is significantly above chance (CI excludes 0)
         assert v["delta_ci95"][0] > 0, f"{assay}: delta CI includes 0"
+        assert v["model1_position_ci95"][0] > 0, f"{assay}: position CI includes 0"
 
 
 def test_bootstrap_reproduces_committed_point_estimates():

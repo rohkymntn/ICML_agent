@@ -88,7 +88,8 @@ Source: `outputs/epistasis/model1_ci.json` — 2,000-resample percentile bootstr
 the held-out doubles of the same committed `model1_oof_{GB1_Olson,GFP}.csv`
 (`scripts/bootstrap_model1_ci.py`, seed 0; point estimates equal the committed
 summaries, and the per-resample Model 1 − zero-shot difference is paired).
-Guarded by `tests/test_model1_ci.py` (no-drift of point estimates + delta CI excludes 0).
+Guarded by `tests/test_model1_ci.py` (no-drift of point estimates + delta CI excludes 0
++ the held-out-position CIs exclude 0).
 
 | Claim in paper | Value | Artifact key / column |
 |---|---|---|
@@ -98,6 +99,8 @@ Guarded by `tests/test_model1_ci.py` (no-drift of point estimates + delta CI exc
 | GFP zero-shot Spearman 95% CI (includes 0) | $[-0.01, 0.02]$ | `model1_ci.json:assays.GFP.zeroshot_ci95` |
 | GB1 gain-over-zero-shot 95% CI | $[0.31, 0.36]$ | `model1_ci.json:assays.GB1_Olson.delta_ci95` |
 | GFP gain-over-zero-shot 95% CI | $[0.11, 0.16]$ | `model1_ci.json:assays.GFP.delta_ci95` |
+| GB1 held-out-position Spearman 95% CI (excludes 0) | $[0.10, 0.14]$ | `model1_ci.json:assays.GB1_Olson.model1_position_ci95` |
+| GFP held-out-position Spearman 95% CI (excludes 0) | $[0.06, 0.10]$ | `model1_ci.json:assays.GFP.model1_position_ci95` |
 
 ## Cross-protein generalization, e2e LoRA fine-tune (Section 7.5 / Table "e2e") — GROUNDED
 
