@@ -115,7 +115,7 @@ and evaluated on the 25 held-out proteins that contribute no training examples; 
 | Training proteins | 124 | `e2e_results.json:n_proteins` − `n_holdout_proteins` |
 | LoRA rank | 64 | `e2e_results.json:lora_r` |
 | Epochs | 10 | `e2e_results.json:epochs` |
-| Trainable params (M) | 12.9 | `e2e_results.json:trainable_params_M` |
+| Trainable params (M) | 12.85 | `e2e_results.json:trainable_params_M` (exact value; the paper prints `12.85M` to avoid a rounding-convention ambiguity, since `round(12.85,1)` is 12.8 under banker's rounding) |
 | Median per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_median_spearman` |
 | Mean per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_mean_spearman` |
 | Fraction of held-out proteins with $\rho>0.2$ | 0.80 | `e2e_results.json:frac_heldout_prot_gt_0p2` |
