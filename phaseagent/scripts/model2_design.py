@@ -185,7 +185,7 @@ def figure_model2(csv, out="paper/figures_epistasis"):
     ax[0].plot([f * 100 for f in FRACS], eo, "o--", color=BLUE, lw=1.4, label="oracle (true epistasis)")
     ax[0].set_xlabel("Top fraction selected among additively-mediocre designs (%)")
     ax[0].set_ylabel("Mean measured binding")
-    ax[0].set_title("A   Recovering gain-of-function additive misses", loc="left", fontsize=12, fontweight="bold")
+    ax[0].set_title("A   Gain-of-function the additive model misses", loc="left", fontsize=12, fontweight="bold")
     ax[0].legend(loc="upper right", fontsize=8.4)
 
     ax[1].bar(range(len(mb)), mb, color=RED, alpha=0.85)

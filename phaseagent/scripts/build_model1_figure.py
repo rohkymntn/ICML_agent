@@ -65,7 +65,7 @@ def main(out="paper/figures_epistasis"):
         ax[0].text(xi, v + 0.008, f"{v:.2f}", ha="center", fontsize=9, color=RED, fontweight="bold")
     ax[0].set_xticks(x); ax[0].set_xticklabels(names)
     ax[0].set_ylabel("Held-out Spearman (specific epistasis)")
-    ax[0].set_title("A   Model 1 predicts function epistasis;\nzero-shot DPLM cannot", loc="left", fontsize=12, fontweight="bold")
+    ax[0].set_title("A   Model 1 predicts functional epistasis;\nzero-shot DPLM cannot", loc="left", fontsize=12, fontweight="bold")
     ax[0].legend(loc="upper right", fontsize=9)
     ax[0].set_ylim(0, max(m1) * 1.25)
 
