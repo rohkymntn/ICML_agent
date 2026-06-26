@@ -21,9 +21,10 @@ When ALL true & verified: set this file to COMPLETE, commit, report `ICML_READY`
 - Story C code is committed: `src/phaseagent/epistasis_decomposition.py`, `scripts/train_model1.py`, `scripts/model2_design.py`, `modal_app_v2.py::{train_epistasis_e2e,train_generative_design}`.
 - Figures (PNG/PDF) for fig1–fig9 are committed under `paper/figures_epistasis/`, BUT their underlying numeric artifacts are NOT committed and are NOT on the Modal volume (`outputs/epistasis/` does not exist on the volume). Only committed data artifact: `paper/figures_epistasis/three_layer_atlas.parquet`.
 - No `paper/epistasis_icml.tex` yet.
-- `tectonic` not installed locally — needs install before DoD #1 can be verified.
+- `tectonic` 0.16.9 installed locally (iter2) — DoD #1 can be compiled/verified once the .tex exists.
 - The numbers quoted in `HANDOFF_EPISTASIS_2026.md` need to be RE-GENERATED into committed CSV/parquet artifacts under `outputs/epistasis/` to be paper-eligible (hard rule: every claim traces to a committed artifact).
 
 ## Log
 
 - iter1 (2026-06-25): Audited repo. Created PROGRESS.md + RUNS.md. Launched detached headline e2e run (train_epistasis_e2e, 10 epochs, lora_r=64, batch 128) — the cross-protein held-out number (DoD #2). See RUNS.md.
+- iter2 (2026-06-25): The iter1 e2e run had DIED (stopped, 0 tasks, no logs) — diagnosed as killed mid-build of the COLD `gpu_lora_image` at the iter1 client teardown. Fix: pre-warm the image cache with `h100_probe` (now builds in ~3 s), then RE-LAUNCHED the headline e2e run detached (`ap-ayiJz1iYjfF0M5qUt0Rhaj`); verified it loads data (`120000 doubles, 149 proteins; holdout 20073 / 25 prot`), trains, and survives local client kill. Installed `tectonic` 0.16.9 locally (DoD #1 prereq). RUNS.md updated. DoD #2 artifact still pending the run's completion.
