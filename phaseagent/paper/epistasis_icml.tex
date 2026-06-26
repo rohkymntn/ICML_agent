@@ -659,6 +659,24 @@ that skill transfers across proteins. Treating specific epistasis as the explici
 learning target, rather than raw fitness, turns ``do PLMs know epistasis?'' into a
 clean, held-out, design-relevant question.
 
+\section*{Impact Statement}
+
+This work studies how to predict and design epistatic interactions in protein
+function. The methodological aim is to advance machine learning for biological
+sequence modeling, and the most direct beneficial applications are in protein
+engineering -- for example designing enzymes, binders, or stabilized therapeutics
+where combinations of mutations must act synergistically. As with any protein-design
+method, the same capability could in principle be applied to engineer harmful
+proteins; we note that our experiments are entirely \emph{in silico}, use only
+well-characterized and benign public assays (GB1 IgG-binding, GFP fluorescence, and
+domain folding stability), and include no wet-lab synthesis or validation, so the
+immediate dual-use risk of the specific results reported here is low. We also
+emphasize that the predictive correlations we report, while above the relevant
+baselines, are far from accurate enough to substitute for experimental measurement,
+which limits the potential for misuse from the models alone. We encourage the use of
+established biosecurity screening for any downstream sequence design built on methods
+of this kind.
+
 \bibliography{epistasis}
 \bibliographystyle{icml2025}
 
