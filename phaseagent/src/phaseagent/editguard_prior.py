@@ -192,14 +192,29 @@ class PriorMetrics:
 
 
 class DMSFunctionPrior:
-    """Calibrated DMS function prior with classifier and regressor heads."""
+    """Calibrated DMS function prior with classifier and regressor heads.
 
-    def __init__(self, random_state: int = 0, n_estimators: int = 200):
+    Calibration can be either pooled (a single isotonic regressor over all
+    calibration points) or **per-protein** (Mondrian: a separate isotonic
+    regressor per dataset_id with a global fallback when n < 30 per group).
+    Per-protein calibration is the recommended setting because PLM/RF
+    miscalibration is family-dependent (Gordon et al., "PLM Fitness is a
+    Matter of Preference", ICLR 2025).
+    """
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_estimators: int = 200,
+        per_protein_calibration: bool = False,
+    ):
         self.random_state = random_state
         self.n_estimators = n_estimators
+        self.per_protein_calibration = bool(per_protein_calibration)
         self.classifier = None
         self.regressor = None
-        self.calibrator = None
+        self.calibrator = None  # global fallback isotonic
+        self.group_calibrators: dict[str, object] = {}  # per-protein isotonic
 
     def fit(
         self,
@@ -250,6 +265,20 @@ class DMSFunctionPrior:
                     self.calibrator = IsotonicRegression(out_of_bounds="clip").fit(
                         p, calibrate_df["viable"].to_numpy(dtype=int)
                     )
+                if self.per_protein_calibration and "dataset_id" in calibrate_df.columns:
+                    self.group_calibrators = {}
+                    for ds_id, sub in calibrate_df.groupby("dataset_id"):
+                        if len(sub) < 30:
+                            continue
+                        if len(np.unique(sub["viable"])) < 2:
+                            continue
+                        p_g = self.predict_proba(sub)
+                        try:
+                            self.group_calibrators[str(ds_id)] = IsotonicRegression(
+                                out_of_bounds="clip"
+                            ).fit(p_g, sub["viable"].to_numpy(dtype=int))
+                        except Exception:
+                            continue
         else:
             self.classifier = _NumpyPrior(train_df)
             self.regressor = self.classifier
@@ -274,6 +303,18 @@ class DMSFunctionPrior:
         else:
             vals = np.asarray(self.classifier.predict(X), dtype=float) if hasattr(self.classifier, "predict") else np.full(n, 0.5)
         vals = np.clip(vals, 1e-6, 1.0 - 1e-6)
+        if self.per_protein_calibration and self.group_calibrators and "dataset_id" in df.columns:
+            ds_ids = df["dataset_id"].astype(str).to_numpy()
+            calibrated = np.empty_like(vals)
+            for i in range(n):
+                cal = self.group_calibrators.get(ds_ids[i])
+                if cal is not None:
+                    calibrated[i] = float(cal.predict(np.array([vals[i]]))[0])
+                elif self.calibrator is not None:
+                    calibrated[i] = float(self.calibrator.predict(np.array([vals[i]]))[0])
+                else:
+                    calibrated[i] = vals[i]
+            return np.clip(calibrated, 1e-6, 1.0 - 1e-6)
         if self.calibrator is not None:
             vals = np.clip(self.calibrator.predict(vals), 1e-6, 1.0 - 1e-6)
         return vals

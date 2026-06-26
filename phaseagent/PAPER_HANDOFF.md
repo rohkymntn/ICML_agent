@@ -31,6 +31,7 @@ where they need to be added.
 14. [Reproducibility runbook](#14-reproducibility-runbook)
 15. [Open questions for the paper author](#15-open-questions-for-the-paper-author)
 16. [Citation list to compile](#16-citation-list-to-compile)
+17. [v2 extensions (few-shot + Megascale + selective prediction + Twisted SMC)](#17-v2-extensions)
 
 ---
 
@@ -890,3 +891,243 @@ ablations, limitations, figures, tables, runbook, citations. The full
 running narrative with deltas-from-v0 is also available at
 `outputs/v1_vs_v0_diagnostic.md` — useful for the paper's "method"
 and "experiments" sections.
+
+---
+
+## 17. v2 extensions
+
+The v1 EditGuard pipeline (§§4–10) is preserved unchanged. This section
+records the v2 extensions added after the v1 freeze, designed to address
+the three reviewer concerns most likely to surface:
+
+1. *"Only 3 test proteins — does this generalize?"* → **few-shot regime + OOD family split.**
+2. *"Is this useful to the field, or only to ML benchmarkers?"* → **Megascale stability-editing track.**
+3. *"What about the F7YBW8 calibration failure?"* → **per-protein conformal abstention.**
+
+Plus one stretch method contribution: **Iterative Twisted SMC on DPLM-650M**.
+
+### 17.1 Few-shot DMS regime
+
+Real protein engineers do not have full DMS datasets — they have ~50–200
+hand-measured variants. We added a few-shot evaluation track that
+subsamples the train DMS to {50, 100, 200, 500} variants per assay using
+three strategies (random / stratified-by-mutation-distance / active
+acquisition with UCB), with 10 random seeds per cell.
+
+- Module: [src/phaseagent/few_shot.py](src/phaseagent/few_shot.py)
+- Modal entrypoint: `modal_app_v2.py::run_few_shot_sweep`
+- Output: `outputs/editguard/few_shot_sweep.csv`
+- Active acquisition follows the EVOLVEpro recipe (Jiang et al., *Science*
+  2025): RF on chemistry/position features as the surrogate, top-N greedy
+  with optional UCB exploration.
+
+### 17.2 OOD family split
+
+The default ProteinGym split is in-distribution by protein family. We added
+a leave-one-family-out OOD evaluation: hold out an entire curated family
+(fluorescent proteins, toxin-antitoxin, photoreceptor, viral capsid, etc.)
+as the test set; train on the rest.
+
+- Module: [src/phaseagent/family_splits.py](src/phaseagent/family_splits.py)
+- Modal entrypoint: `modal_app_v2.py::run_ood_family_eval --held-out-family <name>`
+- Output: `outputs/editguard/ood_family_metrics.csv`
+- Hard guard: `assert_no_family_leakage` runs at the top of every OOD
+  benchmark to refuse runs that contain held-out-family rows in train/val.
+
+### 17.3 Megascale stability-editing track
+
+Per the field-mandated multi-mutant evaluation protocol (ThermoMPNN-D
+2025; MULTI-evolve critique 2026), Megascale evaluation has three tiers:
+
+- **T1 — single test**: `dataset3_single` test split (ThermoMPNN's
+  published split). Pure single-mutant prediction sanity check.
+- **T2 — double mutants**: `dataset2` double-mutant subset, k=1 → k=2
+  generalization. *Always* reported alongside the additive baseline (sum
+  of single-mutant predictions). Headline = Δ(model − additive) on the
+  epistasis slice (where |obs − additive| > 0.5 kcal/mol) plus
+  stabilizing-pair recall@k.
+- **T3 — k≥2 extrapolation**: PTmul-NR. Loaded separately because the
+  source is not on Hugging Face.
+
+- Loader: [src/phaseagent/megascale.py](src/phaseagent/megascale.py) — wraps
+  `RosettaCommons/MegaScale` HF dataset, normalizes mutation notation,
+  rank-norms ΔΔG into [0, 1] per protein.
+- Editing tasks: [src/phaseagent/megascale_tasks.py](src/phaseagent/megascale_tasks.py)
+  — protect top-quartile single-mutant positions ("don't break what
+  works"), forbid liability residues C/M/W/P, three objectives:
+  `stabilize`, `destab_avoid`, `stabilize_safe`.
+- Additive baseline (the field-required null model):
+  [src/phaseagent/additive_baseline.py](src/phaseagent/additive_baseline.py)
+- Modal entrypoints: `modal_app_v2.py::download_megascale`,
+  `train_prior_on_megascale`, `run_megascale_t2_with_additive`.
+- Outputs: `outputs/megascale/prior_singles_metrics.csv`,
+  `outputs/megascale/t2_doubles_metrics.csv`.
+
+### 17.4 Per-protein conformal abstention
+
+The v1 C3 result was honest: ECE = 0.035 on GFP, 0.117 on GCN4, 0.535 on
+F7YBW8. Per-protein temperature/isotonic scaling fixes most of this; the
+remaining gap is handled by selective prediction.
+
+- Per-protein isotonic calibration is now opt-in on `DMSFunctionPrior`
+  (`per_protein_calibration=True`); the `fit` method builds one calibrator
+  per dataset_id with a global fallback when n_per_protein < 30.
+- Conformal layer: [src/phaseagent/conformal.py](src/phaseagent/conformal.py)
+  — split-conformal regression with optional Mondrian (per-protein)
+  calibration. Returns prediction intervals + a per-protein abstention
+  mask. The abstention curve (hit rate as a function of abstention rate)
+  is the panel-b figure for Fig. 3.
+- Modal entrypoint: `modal_app_v2.py::run_conformal_abstention`.
+- Output: `outputs/editguard/conformal_abstention_curve.csv`.
+
+### 17.5 Embedding-based baselines (EVOLVEpro / FLIP2 family)
+
+To respond to the "are RF features the best you can do?" reviewer, we added
+three additional baselines:
+
+- **RF on ESM-2 mean-pool embeddings** (the EVOLVEpro winning configuration).
+- **LightGBM on ESM-2 mean-pool** (FLIP2-validated competitor to RF).
+- **Ridge on one-hot mutation features + zero-shot likelihood** (the
+  FLIP2 surprisingly-strong baseline that matches fine-tuned PLMs in the
+  small-data regime).
+
+Modules: [src/phaseagent/embeddings.py](src/phaseagent/embeddings.py),
+[src/phaseagent/embedding_baselines.py](src/phaseagent/embedding_baselines.py).
+The ESM-2 forward pass lives in a lazy GPU import; a `HashEmbedder` mock
+makes the downstream regression code testable without GPUs.
+
+### 17.6 Iterative Twisted SMC on DPLM-650M (stretch method contribution)
+
+Per the SMC research scout (the guided-discrete-diffusion-with-particles
+space is crowded but DPLM-650M itself is unclaimed), we added a sampler
+combining:
+
+- **Inner loop**: twisted SMC with first-order Taylor approximation for the
+  non-differentiable RF-DMS reward (Ou/Pani/Li 2025, smc_ddm).
+- **Outer loop**: Reward-Guided Iterative Refinement noise-then-denoise
+  evolutionary loop (Uehara et al., ICML 2025).
+- **Reward**: the trained `DMSFunctionPrior` (RF on chemistry features).
+
+Module: [src/phaseagent/twisted_smc.py](src/phaseagent/twisted_smc.py). The
+algorithm is implemented behind `DPLMBackbone` and `RewardModel` protocols
+so the unit tests exercise the control flow with a mock backbone, and the
+production GPU run wires in the real DPLM-650M.
+
+**Compute parity for fair comparison.** SMC with K=8 particles × T=128
+denoising steps × N_outer=2 outer iterations = 2048 forward passes,
+matched against best-of-2048 vanilla DPLM rerank for the headline number.
+The full audit reports the curve over total compute (best-of-32 → best-of-4096).
+
+**Mandatory baselines** (per the SMC scout):
+- Vanilla DPLM-650M sampling
+- Best-of-N RF rerank (existing 0.865)
+- β-classifier guidance (DPLM-style; or Schiff/Nisonoff CFG)
+- DRAKES (Wang et al., ICLR 2025) — the strongest existing protein
+  discrete-diffusion baseline
+- SVDD-PM / SVDD-MC (Li/Uehara et al., NeurIPS 2024)
+- Reward-Guided Iterative Refinement (Uehara et al., ICML 2025)
+
+### 17.7 Nature-tier figures
+
+All v2 figures use the Okabe-Ito 8-color palette (CB-safe, photocopy-safe,
+journal-safe), 7pt sans-serif type, vector PDF + SVG output, no
+chart-junk.
+
+Module: [src/phaseagent/nature_figures.py](src/phaseagent/nature_figures.py).
+Three high-level builders aligned to the EditGuard story:
+
+- `figure_headline_leaderboard` — Fig. 1: leaderboard with bootstrap CIs +
+  per-protein breakdown + Holm-corrected significance bars.
+- `figure_few_shot_scaling` — Fig. 2: AUROC vs train-set size with shaded
+  95% CI band, one line per method.
+- `figure_calibration_and_abstention` — Fig. 3: per-protein reliability
+  diagrams + the conformal-abstention recovery curve.
+
+Modal entrypoint: `modal_app_v2.py::make_nature_figures`. Outputs to
+`outputs/editguard/figures_v2/`.
+
+### 17.8 New citations to compile (v2)
+
+In addition to the v1 citation list (§16), the v2 paper should add:
+
+**Multi-mutant stability ΔΔG / Megascale family**
+- Tsuboyama et al., *Nature* 2023 — Megascale dataset.
+- Dieckhaus et al., *PNAS* 2024 — ThermoMPNN.
+- Dieckhaus & Kuhlman, *Protein Sci.* 2025 — ThermoMPNN-D (epistasis-aware double-mutant).
+- Diaz et al., *Nat Commun* 2024 — Stability Oracle.
+- Ouyang-Zhang et al., 2024 — Mutate-Everything.
+- *bioRxiv* 2026.04.23 — "Additive baselines furnish no evidence for
+  epistasis learning by MULTI-evolve" (the headline-defining critique).
+- *Comm. Biol.* 2026 — JanusDDG (sequence-only multi-point SOTA with
+  thermodynamic-antisymmetry constraints).
+- *Bioinformatics* 2025 — DDGemb.
+- Faure & Lehner, *Nature* 2024 — Domainome (the Megascale companion for
+  human disease relevance).
+
+**Few-shot / active learning**
+- Jiang et al., *Science* 2025 — EVOLVEpro.
+- Yang et al., *Nat Commun* 2025 — ALDE.
+- Zhou et al., *Nat Commun* 2024 — FSFP.
+- Beck et al., ICLR 2025 — Metalic (in-context meta-learning across DMS tasks).
+- Romero et al., *PNAS* 2013 — GP for fitness landscapes (foundational).
+
+**Calibration / selective prediction**
+- Fannjiang/Bates/Angelopoulos/Listgarten/Jordan, *PNAS* 2022 — conformal
+  prediction under feedback covariate shift for biomolecular design.
+- Boger et al., *Nat Commun* 2025 — functional protein mining with
+  conformal guarantees.
+- Greenman/Amini/Yang, *PLoS Comp. Bio.* 2025 — UQ benchmark for protein engineering.
+- Gordon et al., ICLR 2025 — *PLM Fitness Is a Matter of Preference* (the
+  mechanism for F7YBW8 calibration failure).
+- Wang et al., NeurIPS 2025 — Likelihood-to-Fitness Bridging (LFB).
+
+**Discrete-diffusion guidance / SMC**
+- Wang et al., ICML 2024 — DPLM (the backbone).
+- Wang et al., ICLR 2025 — DPLM-2.
+- Wang et al., ICML 2025 — DPLM-2.1 (spotlight; sets the tone for what
+  diagnostic depth ICML expects).
+- Nisonoff et al., ICLR 2025 — Discrete Guidance (formal CTMC framework).
+- Schiff et al., ICLR 2025 — Simple Guidance Mechanisms for Discrete Diffusion.
+- Wang/Uehara et al., ICLR 2025 — DRAKES.
+- Uehara et al., ICML 2025 — Reward-Guided Iterative Refinement.
+- Li/Uehara et al., NeurIPS 2024 — SVDD.
+- Wu/Trippe et al., NeurIPS 2023 — Twisted Diffusion Sampler.
+- Ou/Pani/Li, 2025 — Inference-time scaling of discrete diffusion via
+  importance weighting (smc_ddm — direct algorithmic precedent for §17.6).
+- Yang et al., NeurIPS 2025 — *Steering Generative Models with Experimental
+  Data* (closest published cousin; cite + differentiate).
+
+**Benchmarks comparing simple to deep**
+- Dallago et al., *bioRxiv* 2026 — FLIP2 (independent confirmation of
+  "simple methods often match or beat fine-tuned PLMs").
+
+### 17.9 Reproducibility runbook (v2)
+
+```bash
+# Megascale download + prior + T1/T2 evaluation
+modal run modal_app_v2.py::download_megascale
+modal run modal_app_v2.py::train_prior_on_megascale
+modal run modal_app_v2.py::run_megascale_t2_with_additive
+
+# Few-shot sweep over the existing ProteinGym pipeline
+modal run modal_app_v2.py::run_few_shot_sweep
+
+# OOD family eval (one per family, run as a fan-out)
+for fam in fluorescent_protein toxin_antitoxin photoreceptor viral_capsid \
+           small_beta_domain yeast_metabolism yeast_transcription_factor; do
+  modal run modal_app_v2.py::run_ood_family_eval --held-out-family $fam
+done
+
+# Conformal abstention curve
+modal run modal_app_v2.py::run_conformal_abstention
+
+# Render publication figures
+modal run modal_app_v2.py::make_nature_figures
+
+# End-to-end driver (calls all of the above)
+modal run modal_app_v2.py::run_v2_pipeline
+```
+
+Total v2 compute estimate: ~$50–80 of Modal time on top of the v1 spend
+(few-shot grid is cheap CPU; Megascale T1/T2 is one A10G hour for the
+prior + structures; figures are CPU-only).
