@@ -250,11 +250,12 @@ cross-position test). Code: \texttt{scripts/train\_model1.py}.
 \label{sec:model2}
 
 The design task is to pick gain-of-function combinations from a pool where the
-additive model is uninformative. Among GB1 double mutants whose two singles are
-individually mediocre, the additive prediction rates all candidates roughly
-equal; only specific epistasis distinguishes a synergistic pair from an
-antagonistic one. Model 2 ranks these candidates by predicted specific epistasis
-(from Model 1) and selects the top fraction.
+additive model is uninformative. We form this pool from the GB1 double mutants
+whose additive prediction falls below the median -- the additively-mediocre half,
+where the additive model rates every candidate roughly equal and cannot tell a
+synergistic pair from an antagonistic one; only specific epistasis distinguishes
+them. Model 2 ranks these candidates by predicted specific epistasis (from Model
+1) and selects the top fraction.
 
 We report two quantities. (i) \emph{Gain-of-function recovery}: the measured
 function of the selected variants versus the additive pool mean, versus the
