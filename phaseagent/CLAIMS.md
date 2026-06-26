@@ -23,6 +23,12 @@ Source: `outputs/epistasis/decomposition_summary.json` (derived from the committ
 | Proteins with specific share > 10% | 98% | `decomposition_summary.json:frac_proteins_spec_var_share_gt_0p1` |
 | Proteins with specific std > 0.3 kcal/mol | 85% | `decomposition_summary.json:frac_proteins_spec_std_gt_0p3` |
 
+The grey "measurement-scatter" band in `fig3_specific_epistasis.pdf` (`axvspan(0.1, 0.3)`)
+is an **illustrative reference only**, not a committed result — the §7.1 body text makes no
+numeric noise claim (iter17 removed the earlier unbacked "$\sim 0.1$ kcal/mol / four times"
+phrasing). The "not noise" conclusion rests on the committed variance-share rows above
+(median specific share 28%, $\geq 10\%$ in 98% of proteins).
+
 ## Zero-shot DPLM PLL baseline, STABILITY (Section 7.2 / Table "zeroshot") — GROUNDED
 
 Source: `outputs/epistasis/headroom_summary.json` (per-double zero-shot DPLM PLL
@@ -56,6 +62,8 @@ summary reproduces from the OOF CSV and Model 1 beats the zero-shot floor on dou
 | GB1 Model 1 held-out-position Spearman | $0.12$ | `model1_GB1_Olson_summary.json:model1_position_spearman` |
 | GFP Model 1 held-out-doubles Spearman | $0.14$ | `model1_GFP_summary.json:model1_doubles_spearman` |
 | GFP Model 1 held-out-position Spearman | $0.08$ | `model1_GFP_summary.json:model1_position_spearman` |
+| GB1 Model 1 doubles gain over zero-shot | $+0.34$ | `model1_GB1_Olson_summary.json:delta_doubles` |
+| GFP Model 1 doubles gain over zero-shot | $+0.13$ | `model1_GFP_summary.json:delta_doubles` |
 
 ## Cross-protein generalization, e2e LoRA fine-tune (Section 7.5 / Table "e2e") — GROUNDED
 
@@ -68,6 +76,8 @@ and evaluated on the 25 held-out proteins that contribute no training examples; 
 |---|---|---|
 | Held-out proteins (no training examples) | 25 | `e2e_results.json:n_holdout_proteins` |
 | Training proteins | 124 | `e2e_results.json:n_proteins` − `n_holdout_proteins` |
+| LoRA rank | 64 | `e2e_results.json:lora_r` |
+| Epochs | 10 | `e2e_results.json:epochs` |
 | Trainable params (M) | 12.9 | `e2e_results.json:trainable_params_M` |
 | Median per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_median_spearman` |
 | Mean per-held-out-protein Spearman | $0.33$ | `e2e_results.json:heldout_protein_mean_spearman` |

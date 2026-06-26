@@ -295,10 +295,10 @@ captured by a parameter-light saturation curve.
 
 What remains -- specific epistasis -- is not noise. \Cref{fig:specific} shows the
 distribution of the per-protein residual standard deviation: the median is
-$0.42$ kcal/mol, roughly four times the $\sim 0.1$ kcal/mol measurement noise of
-the assay, and it exceeds $0.3$ kcal/mol for 85\% of proteins. Specific epistasis
-accounts for at least 10\% of double-mutant variance in 98\% of proteins (median
-share 28\%). Specific epistasis is therefore both large and ubiquitous: a real,
+$0.42$ kcal/mol and it exceeds $0.3$ kcal/mol for 85\% of proteins. Specific
+epistasis accounts for at least 10\% of double-mutant variance in 98\% of proteins
+(median share 28\%): it is real explained variance, not measurement scatter.
+Specific epistasis is therefore both large and ubiquitous: a real,
 widespread signal that an additive-plus-global model leaves entirely on the
 table. These numbers are computed by
 \texttt{scripts/build\_decomposition\_artifact.py} from the committed atlas and
@@ -320,8 +320,8 @@ are listed in \cref{tab:decomp}.
   \includegraphics[width=0.86\columnwidth]{fig3_specific_epistasis.pdf}
   \caption{Distribution of specific-epistasis residual magnitude (per-protein
   standard deviation, kcal/mol) after removing the additive and global layers.
-  The median ($0.42$ kcal/mol, red) is far above the assay measurement-noise band
-  (grey): the signal a learned model must predict.}
+  The median ($0.42$ kcal/mol, red) sits above the illustrative measurement-scatter
+  band (grey): the signal a learned model must predict.}
   \label{fig:specific}
 \end{figure}
 
@@ -498,7 +498,7 @@ the recovered gain is genuine epistasis rather than relearned additivity
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\columnwidth]{figures_epistasis/fig9_model2_design.pdf}
+  \includegraphics[width=\columnwidth]{fig9_model2_design.pdf}
   \caption{\textbf{Model 2 design.} (A) Mean measured binding of the top fraction
   selected from the additively-mediocre GB1 pool: ranking by Model 1's predicted
   epistasis (red) recovers gain-of-function combinations the additive baseline
